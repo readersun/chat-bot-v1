@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Claude Web</title>
+<meta name="csrf-token" content="{{ csrf }}">
+<meta name="robots" content="noindex">
 
 <!-- PWA -->
 <link rel="manifest" href="/manifest.webmanifest">
@@ -107,6 +109,13 @@ img, svg, video { max-width: 100%; height: auto; }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* hidden 속성은 반드시 이겨야 한다.
+   .btn 이나 .menu > a 처럼 display 를 지정한 클래스가 브라우저 기본
+   [hidden]{display:none} 보다 우선순위가 높아서, 이 규칙이 없으면
+   el.hidden = true 로 숨긴 요소(관리자 메뉴, 앱 설치, 새 프로젝트)가
+   그대로 보인다. */
+[hidden] { display: none !important; }
 
 /* =========================================================================
    3. 앱 셸 — 모바일 우선 (단일 컬럼 + 드로어)
@@ -641,6 +650,162 @@ body.dragging #drop-hint { display: grid; }
 @media (hover: none) {
   .item .acts { display: flex !important; }
 }
+
+/* =========================================================================
+   10. 포털 요소 (사용자 메뉴 / 세션 필터 / 공개범위)
+   ========================================================================= */
+.pane-tools {
+  flex: none;
+  padding: 0 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chips { display: flex; gap: 6px; }
+
+.chip {
+  flex: 1;
+  min-height: 32px;
+  padding: 0 6px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+#session-search {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+/* 세션 항목 : 공개범위 아이콘 + 이름 + 소유자 */
+.item .vis { flex: none; width: 15px; text-align: center; font-size: 12px; line-height: 1.2; }
+
+.item .stack { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+
+.item .stack .label { width: auto; }
+
+.item .owner {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 사용자 메뉴 */
+.usermenu { position: relative; flex: none; }
+
+#user-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.usermenu .menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 210px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+
+.usermenu .menu-head {
+  padding: 6px 10px 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.usermenu .menu-head > div:first-child { font-weight: 600; }
+.usermenu .menu-sub { font-size: 12px; color: var(--muted); }
+
+.usermenu .menu > button,
+.usermenu .menu > a {
+  display: block;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+  line-height: 38px;
+}
+
+.usermenu .menu > button:hover,
+.usermenu .menu > a:hover { background: var(--panel2); }
+
+/* 채팅 헤더 공개범위 배지 */
+.vis-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  margin-left: 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* 모달 선택지 */
+.modal .choices { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 2px; }
+
+.modal .choices label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel2);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.modal .choices label.on { border-color: var(--accent); background: var(--accent-soft); }
+.modal .choices input { margin: 0; flex: none; }
+.modal .choices .cdesc { color: var(--muted); font-size: 12px; }
 </style>
 </head>
 
@@ -670,6 +835,15 @@ body.dragging #drop-hint { display: grid; }
         <h2>세션</h2>
         <button class="btn primary" id="new-session">+ 새 세션</button>
       </div>
+      <div class="pane-tools">
+        <div class="chips" role="group" aria-label="세션 필터">
+          <button type="button" class="chip active" data-scope="all">전체</button>
+          <button type="button" class="chip" data-scope="mine">내 세션</button>
+          <button type="button" class="chip" data-scope="public">전체 공개</button>
+        </div>
+        <input type="search" id="session-search" placeholder="세션 이름 검색"
+               aria-label="세션 이름 검색" autocomplete="off">
+      </div>
       <div class="pane-list" id="session-list"></div>
     </section>
   </nav>
@@ -682,6 +856,20 @@ body.dragging #drop-hint { display: grid; }
         <div id="chat-sub"></div>
       </div>
       <button class="btn" id="install-btn" hidden>앱 설치</button>
+      <div class="usermenu">
+        <button class="icon-btn" id="user-btn" aria-haspopup="true" aria-expanded="false"
+                aria-label="내 메뉴"><span id="user-initial">?</span></button>
+        <div class="menu" id="user-menu" hidden role="menu">
+          <div class="menu-head">
+            <div id="menu-name"></div>
+            <div id="menu-role" class="menu-sub"></div>
+          </div>
+          <button type="button" id="menu-mine" role="menuitem">내 세션만 보기</button>
+          <button type="button" id="menu-password" role="menuitem">비밀번호 변경</button>
+          <a id="menu-admin" href="/admin" role="menuitem" hidden>관리자</a>
+          <a href="/logout" role="menuitem">로그아웃</a>
+        </div>
+      </div>
     </header>
 
     <div id="messages"><div class="wrap" id="list"></div></div>
@@ -721,8 +909,19 @@ body.dragging #drop-hint { display: grid; }
   var MAX_IMAGES = {{ max_images }};
   var MAX_MB = {{ max_upload_mb }};
   var ALLOWED = {{ allowed_ext|tojson }};
+  var ME = {{ me|tojson }};
+  var IS_ADMIN = {{ is_admin|tojson }};
+  var CSRF = {{ csrf|tojson }};
 
-  var state = { projectId: null, sessionId: null, projects: [], sessions: [], busy: false, files: [] };
+  var ICON_PRIVATE = "🔒";
+  var ICON_PUBLIC = "🌐";
+
+  var state = {
+    projectId: null, sessionId: null, projects: [], sessions: [],
+    busy: false, files: [], canManageProjects: false, session: null,
+    scope: localStorage.getItem("session_scope") || "all",
+    query: ""
+  };
 
   var $ = function (id) { return document.getElementById(id); };
   var listEl = $("list"), scrollEl = $("messages"), inputEl = $("input"),
@@ -754,13 +953,20 @@ body.dragging #drop-hint { display: grid; }
     t._timer = setTimeout(function () { t.style.display = "none"; }, 4000);
   }
 
+  function onUnauthorized() {
+    /* 세션이 끊겼다. 지금 위치를 next 로 넘겨 로그인 후 돌아오게 한다. */
+    window.location.href = "/login?next=" + encodeURIComponent(location.pathname);
+  }
+
   function api(method, url, body) {
-    var opt = { method: method, headers: {} };
+    var opt = { method: method, headers: {}, credentials: "same-origin" };
+    opt.headers["X-CSRF-Token"] = CSRF;
     if (body !== undefined) {
       opt.headers["Content-Type"] = "application/json";
       opt.body = JSON.stringify(body);
     }
     return fetch(url, opt).then(function (res) {
+      if (res.status === 401) { onUnauthorized(); throw new Error("로그인이 필요합니다."); }
       return res.json().catch(function () {
         return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
       }).then(function (data) {
@@ -808,10 +1014,56 @@ body.dragging #drop-hint { display: grid; }
       var inp = null;
       if (opts.input) {
         inp = document.createElement("input");
-        inp.type = "text";
+        inp.type = opts.inputType || "text";
         inp.value = opts.value || "";
         inp.placeholder = opts.placeholder || "";
         box.appendChild(inp);
+      }
+
+      var inp2 = null;
+      if (opts.input2) {
+        inp2 = document.createElement("input");
+        inp2.type = opts.inputType || "text";
+        inp2.placeholder = opts.placeholder2 || "";
+        box.appendChild(inp2);
+      }
+
+      var radios = [];
+      if (opts.choices) {
+        var wrap = document.createElement("div");
+        wrap.className = "choices";
+        opts.choices.forEach(function (c) {
+          var lab = document.createElement("label");
+          var r = document.createElement("input");
+          r.type = "radio";
+          r.name = "modal-choice";
+          r.value = c.value;
+          r.checked = c.value === (opts.choiceValue || opts.choices[0].value);
+          lab.className = r.checked ? "on" : "";
+          var t = document.createElement("span");
+          t.textContent = c.label;
+          lab.appendChild(r);
+          lab.appendChild(t);
+          if (c.desc) {
+            var d = document.createElement("span");
+            d.className = "cdesc";
+            d.textContent = c.desc;
+            lab.appendChild(d);
+          }
+          r.onchange = function () {
+            radios.forEach(function (x) { x.parentNode.className = x.checked ? "on" : ""; });
+          };
+          radios.push(r);
+          wrap.appendChild(lab);
+        });
+        box.appendChild(wrap);
+      }
+
+      function choiceValue() {
+        for (var i = 0; i < radios.length; i++) {
+          if (radios[i].checked) { return radios[i].value; }
+        }
+        return null;
       }
 
       var acts = document.createElement("div");
@@ -838,7 +1090,18 @@ body.dragging #drop-hint { display: grid; }
         if (e.key === "Enter" && opts.input) { e.preventDefault(); ok.click(); }
       }
       cancel.onclick = function () { done(null); };
-      ok.onclick = function () { done(opts.input ? (inp.value.trim() || null) : true); };
+      ok.onclick = function () {
+        if (opts.choices || opts.input2) {
+          if (opts.input && !inp.value.trim()) { inp.focus(); return; }
+          done({
+            value: opts.input ? inp.value.trim() : true,
+            value2: inp2 ? inp2.value : null,
+            choice: choiceValue()
+          });
+          return;
+        }
+        done(opts.input ? (inp.value.trim() || null) : true);
+      };
       ov.onclick = function (e) { if (e.target === ov) { done(null); } };
       document.addEventListener("keydown", onKey);
 
@@ -891,7 +1154,16 @@ body.dragging #drop-hint { display: grid; }
 
     var r = document.createElement("div");
     r.className = "role";
-    r.textContent = role === "user" ? "나" : (role === "error" ? "오류" : "Claude");
+    if (role === "user") {
+      var who = document.createElement("span");
+      who.className = "who";
+      /* 공개 세션에서는 누가 쓴 메시지인지 보여준다 */
+      who.textContent = (msg.user_id && ME && msg.user_id === ME.id) ? "나"
+        : (msg.author_name || "나");
+      r.appendChild(who);
+    } else {
+      r.textContent = role === "error" ? "오류" : "Claude";
+    }
     el.appendChild(r);
 
     var bubble = document.createElement("div");
@@ -940,6 +1212,8 @@ body.dragging #drop-hint { display: grid; }
   function loadProjects(selectId) {
     return api("GET", "/api/projects").then(function (d) {
       state.projects = d.projects;
+      state.canManageProjects = !!d.can_manage;
+      $("new-project").hidden = !state.canManageProjects;
       renderProjects();
       var target = selectId || state.projectId ||
         parseInt(localStorage.getItem("last_project_id"), 10);
@@ -961,40 +1235,66 @@ body.dragging #drop-hint { display: grid; }
   var ICON_TRASH = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
     '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>';
 
-  function paneItem(obj, isActive, onSelect, onRename, onDelete) {
-    var it = document.createElement("div");
-    it.className = "item" + (isActive ? " active" : "");
+  var ICON_GLOBE = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+    '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>' +
+    '<path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg>';
 
+  /*
+   * opts = { name, count, vis, owner, active, onSelect, actions: [...] }
+   * actions 가 비어 있으면 (= 권한 없음) 아이콘 자체를 만들지 않는다.
+   * 프론트에서 숨기는 것만으로 권한을 처리하지는 않는다. 서버도 동일하게 막는다.
+   */
+  function paneItem(opts) {
+    var it = document.createElement("div");
+    it.className = "item" + (opts.active ? " active" : "");
+
+    if (opts.vis) {
+      var v = document.createElement("span");
+      v.className = "vis";
+      v.textContent = opts.vis === "public" ? ICON_PUBLIC : ICON_PRIVATE;
+      v.title = opts.vis === "public" ? "전체 공개" : "나만 보기";
+      it.appendChild(v);
+    }
+
+    var stack = document.createElement("div");
+    stack.className = "stack";
     var lab = document.createElement("div");
     lab.className = "label";
-    lab.textContent = obj.name;
-    lab.title = obj.name;
-    it.appendChild(lab);
+    lab.textContent = opts.name;
+    lab.title = opts.name;
+    stack.appendChild(lab);
+    if (opts.owner) {
+      var ow = document.createElement("div");
+      ow.className = "owner";
+      ow.textContent = opts.owner;
+      stack.appendChild(ow);
+    }
+    it.appendChild(stack);
 
     var cnt = document.createElement("span");
     cnt.className = "count";
-    cnt.textContent = obj.count;
+    cnt.textContent = opts.count;
     it.appendChild(cnt);
 
-    var acts = document.createElement("div");
-    acts.className = "acts";
-    var ren = document.createElement("button");
-    ren.className = "icon-btn";
-    ren.innerHTML = ICON_EDIT;
-    ren.title = "이름 변경";
-    ren.setAttribute("aria-label", "이름 변경");
-    ren.onclick = function (ev) { ev.stopPropagation(); onRename(); };
-    var del = document.createElement("button");
-    del.className = "icon-btn danger";
-    del.innerHTML = ICON_TRASH;
-    del.title = "삭제";
-    del.setAttribute("aria-label", "삭제");
-    del.onclick = function (ev) { ev.stopPropagation(); onDelete(); };
-    acts.appendChild(ren);
-    acts.appendChild(del);
-    it.appendChild(acts);
+    var actions = opts.actions || [];
+    if (actions.length) {
+      var acts = document.createElement("div");
+      acts.className = "acts";
+      actions.forEach(function (a) {
+        var b = document.createElement("button");
+        b.className = "icon-btn" + (a.danger ? " danger" : "");
+        b.innerHTML = a.icon;
+        b.title = a.title;
+        b.setAttribute("aria-label", a.title);
+        b.onclick = function (ev) { ev.stopPropagation(); a.fn(); };
+        acts.appendChild(b);
+      });
+      it.appendChild(acts);
+    }
 
-    it.onclick = function (e) { if (!e.target.closest(".acts")) { onSelect(); } };
+    it.onclick = function (e) {
+      if (!e.target.closest(".acts")) { opts.onSelect(); }
+    };
     return it;
   }
 
@@ -1004,18 +1304,26 @@ body.dragging #drop-hint { display: grid; }
     if (!state.projects.length) {
       var e = document.createElement("div");
       e.className = "pane-empty";
-      e.textContent = "프로젝트가 없습니다.";
+      e.textContent = state.canManageProjects
+        ? "프로젝트가 없습니다."
+        : "프로젝트가 없습니다. 관리자에게 생성을 요청하세요.";
       box.appendChild(e);
       return;
     }
     state.projects.forEach(function (p) {
-      box.appendChild(paneItem(
-        { name: p.name, count: p.session_count },
-        p.id === state.projectId,
-        function () { selectProject(p.id); },
-        function () { renameProject(p); },
-        function () { deleteProject(p); }
-      ));
+      var actions = [];
+      if (state.canManageProjects) {   /* 프로젝트 관리는 관리자만 */
+        actions.push({ icon: ICON_EDIT, title: "이름 변경",
+                       fn: function () { renameProject(p); } });
+        actions.push({ icon: ICON_TRASH, title: "삭제", danger: true,
+                       fn: function () { deleteProject(p); } });
+      }
+      box.appendChild(paneItem({
+        name: p.name, count: p.session_count,
+        active: p.id === state.projectId,
+        onSelect: function () { selectProject(p.id); },
+        actions: actions
+      }));
     });
   }
 
@@ -1070,21 +1378,39 @@ body.dragging #drop-hint { display: grid; }
   }
 
   /* --------------------------------------------------------------- 세션 */
-  function loadSessions(selectId) {
+  function sessionsUrl() {
+    var u = "/api/projects/" + state.projectId + "/sessions?scope=" +
+      encodeURIComponent(state.scope);
+    if (state.query) { u += "&q=" + encodeURIComponent(state.query); }
+    return u;
+  }
+
+  /*
+   * autoSelect=false 로 부르면 (필터/검색 변경) 현재 보고 있는 대화를 건드리지 않는다.
+   */
+  function loadSessions(selectId, autoSelect) {
+    if (autoSelect === undefined) { autoSelect = true; }
     if (!state.projectId) { state.sessions = []; renderSessions(); return Promise.resolve(); }
-    return api("GET", "/api/projects/" + state.projectId + "/sessions").then(function (d) {
+    return api("GET", sessionsUrl()).then(function (d) {
       state.sessions = d.sessions;
       renderSessions();
+      if (!autoSelect) { return null; }
+
       var target = selectId || state.sessionId ||
         parseInt(localStorage.getItem("last_session_id"), 10);
       var found = state.sessions.filter(function (s) { return s.id === target; })[0];
+      /* 마지막에 보던 세션의 권한이 사라졌을 수 있다. 그러면 접근 가능한 첫 세션으로. */
       if (!found) { found = state.sessions[0]; }
       if (found) { return selectSession(found.id, true); }
       state.sessionId = null;
+      state.session = null;
       renderSessions();
       renderChatHeader();
       listEl.textContent = "";
-      emptyChat("+ 새 세션 을 눌러 대화를 시작하세요.");
+      emptyChat(state.query
+        ? "검색 결과가 없습니다."
+        : "+ 새 세션 을 눌러 대화를 시작하세요.");
+      return null;
     });
   }
 
@@ -1101,23 +1427,53 @@ body.dragging #drop-hint { display: grid; }
     if (!state.sessions.length) {
       var e = document.createElement("div");
       e.className = "pane-empty";
-      e.textContent = "세션이 없습니다.";
+      e.textContent = state.query ? "검색 결과가 없습니다."
+        : (state.scope === "mine" ? "내가 만든 세션이 없습니다."
+          : state.scope === "public" ? "공개된 세션이 없습니다." : "세션이 없습니다.");
       box.appendChild(e);
       return;
     }
     state.sessions.forEach(function (s) {
-      box.appendChild(paneItem(
-        { name: s.name, count: s.message_count },
-        s.id === state.sessionId,
-        function () { selectSession(s.id); },
-        function () { renameSession(s); },
-        function () { deleteSession(s); }
-      ));
+      var actions = [];
+      if (s.can_manage) {   /* 소유자만. 서버에서도 동일하게 검사한다 */
+        actions.push({ icon: ICON_GLOBE, title: "공개 범위 변경",
+                       fn: function () { changeVisibility(s); } });
+        actions.push({ icon: ICON_EDIT, title: "이름 변경",
+                       fn: function () { renameSession(s); } });
+        actions.push({ icon: ICON_TRASH, title: "삭제", danger: true,
+                       fn: function () { deleteSession(s); } });
+      }
+      box.appendChild(paneItem({
+        name: s.name,
+        count: s.message_count,
+        vis: s.visibility,
+        owner: ownerLabel(s),
+        active: s.id === state.sessionId,
+        onSelect: function () { selectSession(s.id); },
+        actions: actions
+      }));
     });
+  }
+
+  function ownerLabel(s) {
+    if (s.is_owner) { return "나"; }
+    if (s.owner_name) { return s.owner_name; }
+    return s.is_legacy ? "이전 대화" : "";
+  }
+
+  function setScope(scope) {
+    state.scope = scope;
+    localStorage.setItem("session_scope", scope);
+    var chips = document.querySelectorAll(".chip");
+    for (var i = 0; i < chips.length; i++) {
+      chips[i].classList.toggle("active", chips[i].dataset.scope === scope);
+    }
+    loadSessions(null, false).catch(function (e) { toast(e.message); });
   }
 
   function selectSession(sid, keepNav) {
     state.sessionId = sid;
+    state.session = state.sessions.filter(function (x) { return x.id === sid; })[0] || null;
     localStorage.setItem("last_session_id", sid);
     renderSessions();
     renderChatHeader();
@@ -1125,17 +1481,42 @@ body.dragging #drop-hint { display: grid; }
     return loadMessages();
   }
 
+  var VIS_CHOICES = [
+    { value: "private", label: ICON_PRIVATE + " 나만 보기", desc: "나만 볼 수 있습니다" },
+    { value: "public", label: ICON_PUBLIC + " 전체 공개",
+      desc: "로그인한 모두가 보고 함께 대화할 수 있습니다" }
+  ];
+
   function newSession() {
     if (!state.projectId) { toast("프로젝트를 먼저 선택하세요."); return; }
-    modal({ title: "새 세션", input: true, value: "새 대화" }).then(function (name) {
-      if (!name) { return; }
-      return api("POST", "/api/projects/" + state.projectId + "/sessions", { name: name })
+    modal({
+      title: "새 세션", input: true, value: "새 대화", placeholder: "세션 이름",
+      choices: VIS_CHOICES, choiceValue: "private"    /* 기본값은 나만 보기 */
+    }).then(function (r) {
+      if (!r || !r.value) { return; }
+      return api("POST", "/api/projects/" + state.projectId + "/sessions",
+                 { name: r.value, visibility: r.choice })
         .then(function (d) {
           state.sessionId = d.session.id;
           closeNav();
           return loadSessions(d.session.id).then(function () {
             return loadProjects(state.projectId);
           });
+        });
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  function changeVisibility(s) {
+    modal({
+      title: "공개 범위 변경",
+      message: "'" + s.name + "' 세션을 누가 볼 수 있을지 선택하세요.",
+      choices: VIS_CHOICES, choiceValue: s.visibility, confirmText: "변경"
+    }).then(function (r) {
+      if (!r || !r.choice || r.choice === s.visibility) { return; }
+      return api("PATCH", "/api/sessions/" + s.id, { visibility: r.choice })
+        .then(function () {
+          toast(r.choice === "public" ? "전체 공개로 변경했습니다." : "나만 보기로 변경했습니다.");
+          return loadSessions(state.sessionId);
         });
     }).catch(function (e) { toast(e.message); });
   }
@@ -1168,14 +1549,32 @@ body.dragging #drop-hint { display: grid; }
   /* --------------------------------------------------------------- 대화 */
   function renderChatHeader() {
     var p = state.projects.filter(function (x) { return x.id === state.projectId; })[0];
-    var s = state.sessions.filter(function (x) { return x.id === state.sessionId; })[0];
-    $("chat-title").textContent = s ? s.name : "Claude Web";
-    $("chat-sub").textContent = p ? (s ? p.name : p.name + " — 세션 없음") : "";
-    var disabled = !state.sessionId || state.busy;
+    var s = state.sessions.filter(function (x) { return x.id === state.sessionId; })[0]
+      || state.session;
+
+    var title = $("chat-title");
+    title.textContent = s ? s.name : "Claude Web";
+    if (s) {
+      var b = document.createElement("span");
+      b.className = "vis-badge";
+      b.textContent = (s.visibility === "public" ? ICON_PUBLIC + " 전체 공개"
+        : ICON_PRIVATE + " 나만 보기");
+      title.appendChild(b);
+    }
+
+    var sub = p ? (s ? p.name : p.name + " — 세션 없음") : "";
+    if (s && s.visibility === "public" && !s.is_owner && s.owner_name) {
+      sub += " · " + s.owner_name + " 님의 공개 세션";
+    }
+    $("chat-sub").textContent = sub;
+
+    var canWrite = !!(s && s.can_write);
+    var disabled = !state.sessionId || state.busy || !canWrite;
     sendEl.disabled = disabled;
     inputEl.disabled = disabled;
     $("attach-btn").disabled = disabled;
-    inputEl.placeholder = state.sessionId ? "메시지를 입력하세요..." : "세션을 선택하세요";
+    inputEl.placeholder = !state.sessionId ? "세션을 선택하세요"
+      : (canWrite ? "메시지를 입력하세요..." : "이 세션에는 작성할 수 없습니다");
   }
 
   function emptyChat(text) {
@@ -1189,6 +1588,10 @@ body.dragging #drop-hint { display: grid; }
   function loadMessages() {
     if (!state.sessionId) { return Promise.resolve(); }
     return api("GET", "/api/sessions/" + state.sessionId + "/messages").then(function (d) {
+      if (d.session) {
+        state.session = d.session;
+        renderChatHeader();
+      }
       listEl.textContent = "";
       if (!d.messages.length) { emptyChat("이 세션의 첫 질문을 입력하세요."); }
       d.messages.forEach(addMessage);
@@ -1234,8 +1637,14 @@ body.dragging #drop-hint { display: grid; }
     setBusy(true);
     var pending = addPending();
 
-    fetch("/api/sessions/" + state.sessionId + "/messages", { method: "POST", body: fd })
+    fetch("/api/sessions/" + state.sessionId + "/messages", {
+      method: "POST",
+      body: fd,
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": CSRF }
+    })
       .then(function (res) {
+        if (res.status === 401) { onUnauthorized(); throw new Error("로그인이 필요합니다."); }
         return res.json().catch(function () {
           return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
         });
@@ -1396,7 +1805,74 @@ body.dragging #drop-hint { display: grid; }
     $("install-btn").hidden = true;
   });
 
+  /* --------------------------------------------------------- 사용자 메뉴 */
+  function initUser() {
+    if (!ME) { return; }
+    var name = ME.display_name || ME.username;
+    $("user-initial").textContent = name.slice(0, 1).toUpperCase();
+    $("user-btn").title = name;
+    $("menu-name").textContent = name;
+    $("menu-role").textContent = ME.username + (IS_ADMIN ? " · 관리자" : "");
+    $("menu-admin").hidden = !IS_ADMIN;
+
+    var menu = $("user-menu");
+    function closeMenu() {
+      menu.hidden = true;
+      $("user-btn").setAttribute("aria-expanded", "false");
+    }
+    $("user-btn").onclick = function (e) {
+      e.stopPropagation();
+      menu.hidden = !menu.hidden;
+      this.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
+    };
+    document.addEventListener("click", function (e) {
+      if (!menu.hidden && !e.target.closest(".usermenu")) { closeMenu(); }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") { closeMenu(); }
+    });
+
+    $("menu-mine").onclick = function () { closeMenu(); openNav(); setScope("mine"); };
+    $("menu-password").onclick = function () { closeMenu(); changePassword(); };
+  }
+
+  function changePassword() {
+    modal({
+      title: "비밀번호 변경",
+      message: "현재 비밀번호와 새 비밀번호를 입력하세요. 변경하면 다른 기기는 로그아웃됩니다.",
+      input: true, inputType: "password", placeholder: "현재 비밀번호",
+      input2: true, placeholder2: "새 비밀번호 (8자 이상)",
+      confirmText: "변경"
+    }).then(function (r) {
+      if (!r || !r.value || !r.value2) { return; }
+      return api("POST", "/api/me/password",
+                 { current_password: r.value, new_password: r.value2 })
+        .then(function () { toast("비밀번호를 변경했습니다."); });
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  /* ------------------------------------------------------- 필터 / 검색 */
+  function initFilters() {
+    var chips = document.querySelectorAll(".chip");
+    for (var i = 0; i < chips.length; i++) {
+      chips[i].classList.toggle("active", chips[i].dataset.scope === state.scope);
+      chips[i].onclick = function () { setScope(this.dataset.scope); };
+    }
+    var search = $("session-search");
+    var timer = null;
+    search.oninput = function () {
+      clearTimeout(timer);
+      var v = this.value.trim();
+      timer = setTimeout(function () {
+        state.query = v;
+        loadSessions(null, false).catch(function (e) { toast(e.message); });
+      }, 250);
+    };
+  }
+
   /* ------------------------------------------------------------- 시작 */
+  initUser();
+  initFilters();
   renderChatHeader();
   loadProjects().catch(function (e) { toast("초기 로딩 실패: " + e.message); });
 })();
