@@ -17,6 +17,7 @@ settings_store
 
 import base64
 import hashlib
+import os
 import threading
 import time
 
@@ -37,7 +38,7 @@ SETTING_DEFS = [
      "restart": False, "group": "cli",
      "help": "`which claude` 결과. 예: /usr/local/bin/claude"},
     {"key": "claude_workdir", "label": "Working Directory", "type": "text",
-     "restart": False, "group": "cli",
+     "restart": False, "group": "cli", "must_be_dir": True,
      "help": "claude -p 를 실행할 디렉터리. 비우면 서버 프로세스의 작업 디렉터리"},
     {"key": "claude_extra_args", "label": "Extra Args", "type": "text",
      "restart": False, "group": "cli",
@@ -262,6 +263,9 @@ def _validate(d, raw):
     v = str(raw or "").strip()
     if len(v) > 2000:
         raise SettingError("%s: 값이 너무 깁니다." % d["label"])
+    # 오타 하나로 이후 모든 Claude 호출이 조용히 실패하는 것을 막는다
+    if v and d.get("must_be_dir") and not os.path.isdir(v):
+        raise SettingError("%s: 존재하는 디렉터리가 아닙니다: %s" % (d["label"], v))
     return v
 
 
