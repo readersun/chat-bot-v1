@@ -141,14 +141,40 @@ claude -p --output-format json --add-dir /opt/claude-web/data/uploads --resume <
 
 ## 설치 / 실행
 
+리눅스 서버 기준이다. 저장소 루트가 아니라 그 안의 `claude-web/` 이 앱 디렉터리이므로
+심볼릭 링크로 `/opt/claude-web` 을 만들어 두면 `git pull` 만으로 갱신할 수 있다.
+
 ```bash
-sudo mkdir -p /opt/claude-web && sudo chown -R claude:claude /opt/claude-web
-cd /opt/claude-web
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip && pip install -r requirements.txt
-cp .env.example .env && vi .env
-python app.py
+# 1) 서비스 계정. Claude CLI 인증은 계정별 ~/.claude 에 저장되므로 전용 계정을 쓴다.
+sudo useradd -m -d /home/claude -s /bin/bash claude
+
+# 2) 코드 배치
+sudo git clone https://github.com/readersun/chat-bot-v1.git /opt/chat-bot-v1
+sudo ln -s /opt/chat-bot-v1/claude-web /opt/claude-web
+sudo chown -R claude:claude /opt/chat-bot-v1
+
+# 3) 가상환경과 설정 (모두 claude 계정으로)
+sudo -u claude -H bash -lc '
+  cd /opt/claude-web
+  python3 -m venv venv
+  venv/bin/pip install --upgrade pip
+  venv/bin/pip install -r requirements.txt
+  cp .env.example .env
+'
+
+# 4) .env 수정 후 수동 기동 확인
+sudo -u claude -H vi /opt/claude-web/.env
+sudo -u claude -H /opt/claude-web/venv/bin/python /opt/claude-web/app.py
+```
+
+`data/` (SQLite + 업로드) 는 첫 실행 때 자동 생성되므로 미리 만들 필요가 없다.
+단, `.env` 의 `DATABASE_PATH` / `UPLOAD_DIR` 상위 디렉터리에 claude 계정의 쓰기 권한이 있어야 한다.
+
+코드 갱신:
+
+```bash
+sudo -u claude -H git -C /opt/chat-bot-v1 pull
+sudo systemctl restart claude-web
 ```
 
 접속: `http://<서버IP>:8080/`
