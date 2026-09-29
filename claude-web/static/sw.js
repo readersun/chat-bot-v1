@@ -1,18 +1,36 @@
 /* claude-web service worker
  *
- * 전략
- *   - /api/*        : 네트워크 전용 (대화 데이터는 절대 캐시하지 않는다)
- *   - 화면 이동     : 네트워크 우선 -> 실패하면 캐시된 앱 셸
- *   - 정적 리소스   : 캐시 우선 + 백그라운드 갱신
+ * 로그인이 도입되면서 캐시 정책이 바뀌었다.
+ *
+ *   - 앱 셸("/")은 더 이상 캐시하지 않는다.
+ *     로그인 후의 "/" 응답에는 로그인한 사용자 이름과 CSRF 토큰이 들어간다.
+ *     이를 캐시하면 같은 기기를 쓰는 다른 사람에게 노출될 수 있다.
+ *   - /api/*, /admin/*, /login, /logout, /setup 도 캐시하지 않는다.
+ *     대화 내용, 첨부 이미지, 관리자 설정이 디스크에 남지 않아야 한다.
+ *   - 캐시 대상은 로그인과 무관한 정적 리소스(아이콘/CSS/manifest)뿐이다.
+ *
+ * 그래서 오프라인일 때는 안내 페이지만 뜬다. 인증이 필요한 앱에서는
+ * 이것이 올바른 절충이다.
+ *
+ * VERSION 을 올리면 activate 에서 이전 캐시를 통째로 지운다.
+ * v1 이 캐시해 둔 "/" 응답도 이때 함께 제거된다.
  */
-const VERSION = "claude-web-v1";
+const VERSION = "claude-web-v2";
+
 const SHELL = [
-  "/",
   "/manifest.webmanifest",
+  "/static/shared.css",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",
   "/static/icons/apple-touch-icon.png",
 ];
+
+// 어떤 경우에도 캐시하지 않을 경로
+const NEVER_CACHE = ["/api/", "/admin", "/login", "/logout", "/setup", "/health", "/sw.js"];
+
+function isPrivate(pathname) {
+  return NEVER_CACHE.some((p) => pathname === p || pathname.startsWith(p));
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -40,31 +58,22 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) { return; }
 
-  // 대화/프로젝트 데이터와 첨부 이미지는 항상 서버에서 가져온다
-  if (url.pathname.startsWith("/api/") || url.pathname === "/health") {
-    return;
-  }
+  // 인증/대화 관련 경로는 서비스워커가 관여하지 않는다
+  if (isPrivate(url.pathname)) { return; }
 
-  // 페이지 이동: 네트워크 우선, 오프라인이면 캐시된 셸
+  // 페이지 이동: 항상 네트워크. 응답을 저장하지 않는다.
+  // (로그인 리다이렉트와 사용자별 내용이 캐시에 남지 않게 한다)
   if (req.mode === "navigate") {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(VERSION).then((c) => c.put("/", copy)).catch(() => {});
-          return res;
-        })
-        .catch(() => caches.match("/").then((hit) => hit || offlinePage()))
-    );
+    event.respondWith(fetch(req).catch(() => offlinePage()));
     return;
   }
 
-  // 정적 리소스: 캐시 우선
+  // 정적 리소스: 캐시 우선 + 백그라운드 갱신
   event.respondWith(
     caches.match(req).then((hit) => {
       const network = fetch(req)
         .then((res) => {
-          if (res && res.status === 200) {
+          if (res && res.status === 200 && res.type === "basic") {
             const copy = res.clone();
             caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {});
           }
