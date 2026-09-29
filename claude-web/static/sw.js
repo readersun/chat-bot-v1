@@ -15,7 +15,7 @@
  * VERSION 을 올리면 activate 에서 이전 캐시를 통째로 지운다.
  * v1 이 캐시해 둔 "/" 응답도 이때 함께 제거된다.
  */
-const VERSION = "claude-web-v2";
+const VERSION = "claude-web-v3";
 
 const SHELL = [
   "/manifest.webmanifest",
