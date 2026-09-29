@@ -38,9 +38,9 @@ import time
 
 from flask import g
 
-from config import BACKUP_DIR, DATABASE_PATH
+from config import BACKUP_DIR, DATABASE_PATH, UPLOAD_DIR
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -191,6 +191,48 @@ def column_names(conn, table):
     return {r["name"] for r in conn.execute("PRAGMA table_info(%s)" % table)}
 
 
+# ---------------------------------------------------------------------------
+# v2 -> v3 : attachments.file_path 를 UPLOAD_DIR 기준 상대경로로 바꾼다
+#
+# v2 까지는 절대경로를 넣었다. 그 DB 를 다른 서버로 옮기면 업로드 경로가 달라져
+# (개발 PC 의 data/uploads -> /var/lib/claude-web/uploads) 첨부 API 의 경로 검사에
+# 전부 걸려 이미지가 하나도 열리지 않는다.
+# 저장 규칙이 project_<id>/session_<id>/<uuid>.<ext> 로 고정이므로 그 꼬리만 남긴다.
+# 파일 자체는 건드리지 않는다. DB 에 적힌 표기만 옮긴다.
+# ---------------------------------------------------------------------------
+def is_absolute_path(value):
+    """POSIX 절대경로와 Windows 경로를 실행 중인 OS 와 무관하게 판별한다."""
+    v = str(value or "")
+    if v[:1] in ("/", "\\"):
+        return True
+    return len(v) > 2 and v[1] == ":" and v[2] in ("/", "\\")
+
+
+def to_relative_upload_path(value):
+    """상대경로로 바꾼 값. 저장 규칙에 맞는 꼬리를 못 찾으면 None."""
+    parts = [p for p in str(value or "").replace("\\", "/").split("/") if p]
+    for i, name in enumerate(parts):
+        if name.startswith("project_") and name[len("project_"):].isdigit():
+            tail = parts[i:]
+            if len(tail) >= 2:
+                return "/".join(tail)
+    return None
+
+
+def legacy_attachment_paths(conn):
+    """고쳐야 할 행을 [(id, 상대경로), ...] 로 돌려준다."""
+    if not table_exists(conn, "attachments"):
+        return []
+    out = []
+    for r in conn.execute("SELECT id, file_path FROM attachments"):
+        if not is_absolute_path(r["file_path"]):
+            continue
+        rel = to_relative_upload_path(r["file_path"])
+        if rel:
+            out.append((r["id"], rel))
+    return out
+
+
 def harden_permissions():
     """DB 파일에 자격증명/설정이 들어가므로 소유자만 읽도록 제한한다. (POSIX)"""
     if os.name != "posix":
@@ -265,6 +307,9 @@ def pending_migrations(conn):
             todo.append("sessions.visibility 추가")
     if table_exists(conn, "messages") and "user_id" not in column_names(conn, "messages"):
         todo.append("messages.user_id 추가")
+    n = len(legacy_attachment_paths(conn))
+    if n:
+        todo.append("attachments.file_path %d건을 상대경로로 변환" % n)
     return todo
 
 
@@ -336,6 +381,15 @@ def migrate(verbose=True):
                         "ALTER TABLE messages ADD COLUMN user_id INTEGER "
                         "REFERENCES users(id)")
                     steps.append("messages.user_id 추가 (기존 행은 NULL)")
+
+            legacy = legacy_attachment_paths(conn)
+            if legacy:
+                conn.executemany(
+                    "UPDATE attachments SET file_path = ? WHERE id = ?",
+                    [(rel, aid) for aid, rel in legacy])
+                steps.append(
+                    "attachments.file_path %d건을 상대경로로 변환 (기준: %s)"
+                    % (len(legacy), UPLOAD_DIR))
 
             for stmt in indexes:
                 conn.execute(stmt)

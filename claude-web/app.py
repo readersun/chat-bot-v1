@@ -149,6 +149,25 @@ def session_upload_dir(project_id, session_id):
     return path
 
 
+def rel_upload_path(full_path):
+    """
+    DB 에 넣을 값을 만든다. UPLOAD_DIR 기준 **상대경로**다.
+
+    절대경로를 넣으면 개발 PC 에서 만든 DB 를 운영 서버로 옮겼을 때
+    (C:\\...\\data\\uploads -> /var/lib/claude-web/uploads) 모든 첨부가
+    경로 검사에 걸려 열리지 않는다. 구분자는 항상 "/" 로 저장해 OS 도 타지 않는다.
+    """
+    return os.path.relpath(os.path.abspath(full_path), UPLOAD_DIR).replace("\\", "/")
+
+
+def abs_upload_path(stored):
+    """DB 의 file_path 를 실제 경로로 되돌린다. 마이그레이션 전 절대경로도 받는다."""
+    value = str(stored or "")
+    if value.startswith(("/", "\\")) or (len(value) > 2 and value[1] == ":"):
+        return value
+    return os.path.join(UPLOAD_DIR, value.replace("/", os.sep))
+
+
 def save_upload(storage, project_id, session_id):
     """
     확장자 + 매직바이트 + 선언 MIME 세 가지를 모두 검사하고 UUID 이름으로 저장한다.
@@ -187,7 +206,8 @@ def save_upload(storage, project_id, session_id):
     return {
         "original_name": original[:255],
         "stored_name": stored_name,
-        "file_path": os.path.abspath(full_path),
+        "file_path": rel_upload_path(full_path),   # DB 에 들어가는 값
+        "abs_path": os.path.abspath(full_path),    # 이번 요청에서만 쓰는 실제 경로
         "mime_type": sniffed,
         "file_size": size,
     }, None
@@ -208,7 +228,7 @@ def remove_tree(path):
 def discard_uploads(saved):
     for s in saved:
         try:
-            os.remove(s["file_path"])
+            os.remove(s["abs_path"])
         except OSError:
             pass
 
@@ -799,7 +819,7 @@ def post_message(sid):
             db.commit()
 
             started = time.time()
-            images = [(s["original_name"], s["file_path"], s["mime_type"]) for s in saved]
+            images = [(s["original_name"], s["abs_path"], s["mime_type"]) for s in saved]
             author = user["display_name"] or user["username"]
             ok, reply, mode = ask_claude(db, provider, sess, text, images,
                                          user_msg_id, author=author)
@@ -845,7 +865,7 @@ def get_attachment(aid):
     # private 세션의 이미지는 소유자만. URL 을 알아도 접근할 수 없다.
     permissions.require_view_session(db, user, sess)
 
-    path = os.path.realpath(row["file_path"])
+    path = os.path.realpath(abs_upload_path(row["file_path"]))
     root = os.path.realpath(UPLOAD_DIR)
     try:
         inside = os.path.commonpath([path, root]) == root
