@@ -1,9 +1,15 @@
 # /etc/systemd/system/claude-web.service
 # 복사: sudo cp claude-web.service /etc/systemd/system/claude-web.service
 # User / 경로는 실제 환경에 맞게 수정하세요.
+#
+# 최초 1회: 기동 후 아래 명령으로 관리자 bootstrap 토큰을 확인하고
+#           브라우저에서 /setup 을 엽니다.
+#     journalctl -u claude-web -n 50 | grep -i "bootstrap token"
+#   또는 셸에서 바로 만들기:
+#     sudo -u claude -H /opt/claude-web/venv/bin/python /opt/claude-web/app.py create-admin
 
 [Unit]
-Description=Claude Web Chat (Flask + claude -p)
+Description=Claude Web Portal (Flask + Claude Provider)
 After=network-online.target
 Wants=network-online.target
 
@@ -26,6 +32,11 @@ Environment=PYTHONUNBUFFERED=1
 Environment=LANG=ko_KR.UTF-8
 Environment=PYTHONIOENCODING=utf-8
 Environment=PATH=/opt/claude-web/venv/bin:/usr/local/bin:/usr/bin:/bin
+
+# /var/lib/claude-web 을 systemd 가 만들고 User/Group 소유로 맞춰 줍니다.
+# .env 의 DATABASE_PATH / UPLOAD_DIR 를 이 경로로 두면 됩니다.
+StateDirectory=claude-web
+StateDirectoryMode=0750
 
 ExecStart=/opt/claude-web/venv/bin/python /opt/claude-web/app.py
 

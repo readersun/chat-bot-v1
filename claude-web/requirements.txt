@@ -1,2 +1,7 @@
 Flask>=3.0.0
 python-dotenv>=1.0.0
+
+# 선택: 설치하면 관리자 페이지에 저장하는 Claude API Key 를 DB 에 암호화해서
+# 넣습니다. (SECRET_KEY 파생 키 / Fernet) 없으면 평문으로 저장하되 DB 파일
+# 권한을 0600 으로 제한합니다. CLI provider 만 쓴다면 필요 없습니다.
+#cryptography>=42.0.0
