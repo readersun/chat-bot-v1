@@ -20,7 +20,11 @@ EnvironmentFile=/opt/claude-web/.env
 # claude CLI 는 ~/.claude 아래 인증정보를 사용하므로 HOME 이 반드시 필요합니다.
 Environment=HOME=/home/claude
 Environment=PYTHONUNBUFFERED=1
+
+# 서버에 ko_KR.UTF-8 로케일이 생성되어 있지 않아도 한글 로그가 깨지지 않도록
+# 파이썬 입출력 인코딩을 로케일과 무관하게 고정한다.
 Environment=LANG=ko_KR.UTF-8
+Environment=PYTHONIOENCODING=utf-8
 Environment=PATH=/opt/claude-web/venv/bin:/usr/local/bin:/usr/bin:/bin
 
 ExecStart=/opt/claude-web/venv/bin/python /opt/claude-web/app.py
