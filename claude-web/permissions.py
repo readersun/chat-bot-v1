@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+permissions
+===========
+
+권한 규칙을 한 곳에 모은다. 라우트마다 조건을 다시 쓰지 않는다.
+
+규칙 요약
+---------
+                    조회   작성   이름/공개범위 변경   삭제
+private  owner       O      O            O             O
+         그 외       X      X            X             X
+public   owner       O      O            O             O
+         로그인자    O      O            X             X
+
+admin
+  - 사용자/시스템 설정/프로젝트 관리 가능
+  - **private 세션의 대화 내용은 볼 수 없다.** (요구사항 27)
+    "나만 보기" 가 실제로 나만 보기여야 하므로 can_view_session 에서 admin 을
+    특별 취급하지 않는다. 관리자는 메타데이터(목록/소유자/크기)만 다루는
+    별도 엔드포인트(/api/admin/sessions)를 쓴다.
+
+session_members 는 지금은 비어 있지만(향후 shared 용) 규칙에는 이미 반영해
+두었다. 나중에 shared 를 붙일 때 이 파일만 고치면 된다.
+"""
+
+from flask import abort
+
+PRIVATE = "private"
+PUBLIC = "public"
+VISIBILITIES = (PRIVATE, PUBLIC)
+
+
+def is_admin(user):
+    return bool(user) and user["role"] == "admin"
+
+
+def is_owner(user, sess):
+    if not user or sess is None:
+        return False
+    owner_id = sess["owner_id"]
+    return owner_id is not None and owner_id == user["id"]
+
+
+def member_permission(db, session_id, user_id):
+    """향후 shared 용. 지금은 항상 None 이다."""
+    if not user_id:
+        return None
+    row = db.execute(
+        "SELECT permission FROM session_members WHERE session_id = ? AND user_id = ?",
+        (session_id, user_id)).fetchone()
+    return row["permission"] if row else None
+
+
+# ---------------------------------------------------------------------------
+# 판정
+# ---------------------------------------------------------------------------
+def can_view_session(db, user, sess):
+    if not user or sess is None:
+        return False
+    if is_owner(user, sess):
+        return True
+    if sess["visibility"] == PUBLIC:
+        return True
+    return member_permission(db, sess["id"], user["id"]) in ("read", "write")
+
+
+def can_write_session(db, user, sess):
+    """메시지를 추가할 수 있는가. public 은 로그인 사용자 누구나 가능하다."""
+    if not user or sess is None:
+        return False
+    if is_owner(user, sess):
+        return True
+    if sess["visibility"] == PUBLIC:
+        return True
+    return member_permission(db, sess["id"], user["id"]) == "write"
+
+
+def can_manage_session(user, sess):
+    """이름 변경 / 공개범위 변경 / 삭제. 소유자만."""
+    return is_owner(user, sess)
+
+
+def can_view_project(user):
+    """프로젝트는 공용 그룹이므로 로그인 사용자면 모두 볼 수 있다."""
+    return bool(user)
+
+
+def can_manage_project(user):
+    """프로젝트 생성/이름변경/삭제는 관리자만. (공용 목록이 무분별하게 늘지 않게)"""
+    return is_admin(user)
+
+
+# ---------------------------------------------------------------------------
+# require_* : 실패하면 곧바로 HTTP 오류
+# ---------------------------------------------------------------------------
+def require_admin(user):
+    if not user:
+        abort(401, "로그인이 필요합니다.")
+    if not is_admin(user):
+        abort(403, "관리자 권한이 필요합니다.")
+
+
+def require_view_session(db, user, sess):
+    if not can_view_session(db, user, sess):
+        # 존재 여부까지 숨긴다. private 세션의 id 를 찍어봐도 404 만 보인다.
+        abort(404, "세션을 찾을 수 없습니다.")
+
+
+def require_write_session(db, user, sess):
+    if not can_view_session(db, user, sess):
+        abort(404, "세션을 찾을 수 없습니다.")
+    if not can_write_session(db, user, sess):
+        abort(403, "이 세션에 메시지를 작성할 권한이 없습니다.")
+
+
+def require_manage_session(db, user, sess):
+    if not can_view_session(db, user, sess):
+        abort(404, "세션을 찾을 수 없습니다.")
+    if not can_manage_session(user, sess):
+        abort(403, "세션 소유자만 변경하거나 삭제할 수 있습니다.")
+
+
+def require_manage_project(user):
+    if not user:
+        abort(401, "로그인이 필요합니다.")
+    if not can_manage_project(user):
+        abort(403, "프로젝트 관리는 관리자만 할 수 있습니다.")
+
+
+# ---------------------------------------------------------------------------
+# 목록 조회용 SQL 조각
+# ---------------------------------------------------------------------------
+def visible_sessions_clause(user, scope="all"):
+    """
+    세션 목록을 DB 단계에서 걸러낸다. (프론트에서 숨기는 방식이 아니다)
+    반환: (where 조각, 파라미터 list)
+    scope : all | mine | public
+    """
+    uid = user["id"]
+    if scope == "mine":
+        return "s.owner_id = ?", [uid]
+    if scope == "public":
+        # 공개 세션 중 내 것이 아닌 것 (목록 중복 방지)
+        return "(s.visibility = 'public' AND (s.owner_id IS NULL OR s.owner_id != ?))", [uid]
+    return (
+        "(s.owner_id = ? OR s.visibility = 'public' "
+        " OR EXISTS (SELECT 1 FROM session_members sm "
+        "            WHERE sm.session_id = s.id AND sm.user_id = ?))",
+        [uid, uid],
+    )
