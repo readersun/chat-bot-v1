@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>최초 설정 · Claude Web</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#202126" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="/static/shared.css">
+</head>
+<body>
+<div class="center-wrap">
+  <form class="card" method="post" action="/setup" autocomplete="off">
+    <h1>최초 관리자 계정 만들기</h1>
+    <p class="sub">이 화면은 관리자 계정이 하나도 없을 때만 열립니다.</p>
+
+    {% if error %}
+    <div class="alert error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <div class="alert warn">
+      아무나 관리자가 되는 것을 막기 위해 <strong>bootstrap 토큰</strong>이 필요합니다.
+      서버에서 확인하세요.
+      <pre>journalctl -u claude-web -n 50 | grep -i "bootstrap token"
+cat {{ token_file }}</pre>
+      셸에서 바로 만들려면 <span class="mono">python app.py create-admin</span>
+    </div>
+
+    <input type="hidden" name="_csrf" value="{{ csrf }}">
+
+    <div class="field">
+      <label for="token">bootstrap 토큰</label>
+      <input id="token" name="token" type="text" class="mono" required autofocus
+             autocapitalize="none" autocorrect="off" spellcheck="false">
+    </div>
+
+    <div class="field">
+      <label for="username">관리자 아이디</label>
+      <input id="username" name="username" type="text" required
+             value="{{ username|default('') }}"
+             autocapitalize="none" autocorrect="off" spellcheck="false">
+      <div class="help">영문/숫자/._- 조합 3~32자</div>
+    </div>
+
+    <div class="field">
+      <label for="display_name">표시 이름</label>
+      <input id="display_name" name="display_name" type="text"
+             value="{{ display_name|default('') }}" placeholder="비우면 아이디와 동일">
+    </div>
+
+    <div class="field">
+      <label for="password">비밀번호</label>
+      <input id="password" name="password" type="password" required
+             autocomplete="new-password">
+      <div class="help">8자 이상</div>
+    </div>
+
+    <div class="field">
+      <label for="password2">비밀번호 확인</label>
+      <input id="password2" name="password2" type="password" required
+             autocomplete="new-password">
+    </div>
+
+    <button class="btn primary block" type="submit">관리자 계정 만들기</button>
+  </form>
+</div>
+</body>
+</html>
