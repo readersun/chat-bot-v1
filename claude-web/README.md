@@ -32,7 +32,15 @@ claude-web/
 ├── admin.py             관리자 페이지 + 관리 API
 ├── requirements.txt
 ├── .env.example
-├── claude-web.service   systemd 유닛 예시
+├── DEPLOYMENT.md        운영 배포 가이드 (새 리눅스 서버 0부터)
+├── deploy/
+│   ├── claude-web.service       systemd 유닛
+│   ├── gunicorn.conf.py         운영 WSGI 설정 (워커 1개인 이유 포함)
+│   ├── nginx-http.conf.example  내부망 HTTP
+│   └── nginx-https.conf.example 사내 인증서 HTTPS
+├── scripts/
+│   ├── install.sh       반복 작업 자동화 (Ubuntu)
+│   └── backup.sh        DB online backup + uploads
 ├── templates/
 │   ├── index.html       채팅 화면 (반응형 + PWA)
 │   ├── login.html       로그인
@@ -139,6 +147,10 @@ base64 content block 으로 바꿔 보낸다. 이 차이는 provider 안에 갇�
 - **전역 한도** — `최대 동시 실행`(관리자 설정)을 넘으면 `429`. 값을 바꾸면
   재시작 없이 다음 요청부터 적용된다.
 
+둘 다 **프로세스 메모리**에 있다. 그래서 gunicorn 워커를 여러 개로 늘리면
+공유되지 않아 제한이 워커 수만큼 늘어나고, 같은 public 세션에 대한 동시 요청이
+서로 다른 워커에 걸려 lock 을 통과해 버린다. 운영은 워커 1개 + 스레드 구성이다.
+
 ## DB 스키마
 
 | 테이블 | 내용 |
@@ -149,7 +161,7 @@ base64 content block 으로 바꿔 보낸다. 이 차이는 provider 안에 갇�
 | `sessions` | id, project_id, **owner_id**, name, **visibility**(private/public), claude_session_id |
 | `session_members` | session_id, user_id, permission(read/write) — 향후 shared 용 |
 | `messages` | id, session_id, **user_id**, role(user/assistant/error), content |
-| `attachments` | id, session_id, message_id, original_name, stored_name, file_path, mime_type, file_size |
+| `attachments` | id, session_id, message_id, original_name, stored_name, **file_path**(`UPLOAD_DIR` 기준 상대경로), mime_type, file_size |
 | `audit_logs` | user_id, action, target_type, target_id, details |
 | `login_attempts` | username, ip, success — 로그인 제한용 |
 
@@ -185,6 +197,16 @@ visibility = public  (기존과 똑같이 모두가 볼 수 있음)
 
 소유자가 없는 세션은 일반 사용자가 이름 변경/삭제를 할 수 없다.
 관리자 대시보드에 목록이 뜨고 거기서 **소유자를 지정**하면 그때부터 그 사람이 관리한다.
+
+### 첨부 경로 상대화(v2 → v3)
+
+v2 까지는 `attachments.file_path` 에 절대경로를 넣었다. 그 DB 를 다른 서버로
+옮기면 업로드 경로가 달라져(`.../data/uploads` → `/var/lib/claude-web/uploads`)
+첨부 API 의 경로 검사에 전부 걸려 이미지가 하나도 열리지 않는다.
+
+v3 이 이 값들을 `UPLOAD_DIR` 기준 상대경로(`project_1/session_2/<uuid>.png`)로
+바꾼다. 파일은 건드리지 않고 DB 의 표기만 옮긴다. 이후 저장도 상대경로라
+경로가 바뀌어도 그대로 동작한다. 개발 PC 의 DB 를 운영 서버로 옮길 때 필요하다.
 
 ## 최초 관리자
 
@@ -284,58 +306,66 @@ sudo -u claude -H /opt/claude-web/venv/bin/python /opt/claude-web/app.py create-
 
 ## 설치 / 실행
 
-리눅스 서버 기준이다. 저장소 루트가 아니라 그 안의 `claude-web/` 이 앱 디렉터리이므로
-심볼릭 링크로 `/opt/claude-web` 을 만들어 두면 `git pull` 만으로 갱신할 수 있다.
+운영 서버 배포는 **[DEPLOYMENT.md](DEPLOYMENT.md)** 에 전부 정리되어 있다.
+아무것도 설치되지 않은 Ubuntu 서버 한 대에 0부터 올리는 절차다.
+(OS 패키지 -> 계정 -> 소스 -> venv -> Claude CLI -> 인증 -> .env -> DB -> gunicorn
+-> systemd -> nginx -> 관리자 설정 -> 테스트 -> 재부팅 -> 업데이트 -> 백업 -> 장애 대응)
+
+반복 작업만 자동화한 스크립트도 있다. 다만 Claude 인증과 관리자 설정은
+사람이 직접 해야 하므로, 처음 배포한다면 DEPLOYMENT.md 를 읽고 진행할 것.
 
 ```bash
-# 1) 서비스 계정. Claude CLI 인증은 계정별 ~/.claude 에 저장되므로 전용 계정을 쓴다.
-sudo useradd -m -d /home/claude -s /bin/bash claude
-
-# 2) 코드 배치
-sudo git clone https://github.com/readersun/chat-bot-v1.git /opt/chat-bot-v1
-sudo ln -s /opt/chat-bot-v1/claude-web /opt/claude-web
-sudo chown -R claude:claude /opt/chat-bot-v1
-
-# 3) 가상환경과 설정 (모두 claude 계정으로)
-sudo -u claude -H bash -lc '
-  cd /opt/claude-web
-  python3 -m venv venv
-  venv/bin/pip install --upgrade pip
-  venv/bin/pip install -r requirements.txt
-  cp .env.example .env
-'
-
-# 4) .env 수정 (최소한 SECRET_KEY 는 반드시 채운다)
-sudo -u claude -H vi /opt/claude-web/.env
-
-# 5) 수동 기동 확인
-sudo -u claude -H /opt/claude-web/venv/bin/python /opt/claude-web/app.py
+sudo bash scripts/install.sh
 ```
+
+### 개발 PC 에서 띄울 때
+
+```bash
+cd claude-web
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+cp .env.example .env          # SECRET_KEY 만 채우면 된다
+venv/bin/python app.py        # http://127.0.0.1:8080
+```
+
+`app.py` 를 직접 실행하면 Flask 개발 서버가 뜬다. **운영에는 쓰지 않는다.**
 
 Claude CLI 확인 (웹 서버를 돌릴 계정으로):
 
 ```bash
 which claude          # -> 관리자 페이지의 CLI 경로에 사용
 claude --version
-sudo -u claude -H claude -p "hello"
+sudo -u claudeweb -H claude -p "Respond only with OK"
 ```
 
-코드 갱신:
+Claude 인증은 **계정 단위**(`$HOME/.claude/.credentials.json`)다. 본인 SSH 계정에서
+되는 것으로는 부족하고, 서비스를 실행하는 계정에서 되어야 한다.
+
+## 운영 WSGI (gunicorn)
 
 ```bash
-sudo -u claude -H git -C /opt/chat-bot-v1 pull
-sudo systemctl restart claude-web
+venv/bin/gunicorn --config deploy/gunicorn.conf.py app:app
 ```
+
+**워커는 반드시 1개다.** 동시 실행 제한(`ConcurrencyLimiter`), 세션 lock
+(`_SESSION_LOCKS`), 최초 관리자 토큰(`auth._setup_token`)이 프로세스 메모리에
+있어서 워커를 늘리면 공유되지 않고 조용히 깨진다. 동시성은 스레드로 낸다.
+자세한 내용은 `deploy/gunicorn.conf.py` 주석과 DEPLOYMENT.md 12장에 있다.
+
+타임아웃은 **Claude(180) < gunicorn(300) < nginx(360)** 순서를 지켜야 한다.
 
 ## systemd
 
 ```bash
-sudo cp claude-web.service /etc/systemd/system/claude-web.service
+sudo cp deploy/claude-web.service /etc/systemd/system/claude-web.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now claude-web
 sudo systemctl status claude-web
 journalctl -u claude-web -f
 ```
+
+`HOME` 과 `PATH` 를 unit 에 명시해야 한다. systemd 는 로그인 셸의 환경을
+물려받지 않아서, 이게 빠지면 셸에서는 되는데 웹에서만 Claude 호출이 실패한다.
 
 ## 환경변수 (.env)
 
