@@ -1,0 +1,38 @@
+# /etc/systemd/system/claude-web.service
+# 복사: sudo cp claude-web.service /etc/systemd/system/claude-web.service
+# User / 경로는 실제 환경에 맞게 수정하세요.
+
+[Unit]
+Description=Claude Web Chat (Flask + claude -p)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# claude CLI 가 로그인된 계정으로 실행해야 인증이 재사용됩니다. (root 아님)
+User=claude
+Group=claude
+
+WorkingDirectory=/opt/claude-web
+EnvironmentFile=/opt/claude-web/.env
+
+# claude CLI 는 ~/.claude 아래 인증정보를 사용하므로 HOME 이 반드시 필요합니다.
+Environment=HOME=/home/claude
+Environment=PYTHONUNBUFFERED=1
+Environment=LANG=ko_KR.UTF-8
+Environment=PATH=/opt/claude-web/venv/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/opt/claude-web/venv/bin/python /opt/claude-web/app.py
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-web
+
+[Install]
+WantedBy=multi-user.target
