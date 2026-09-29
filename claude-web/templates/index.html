@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Claude Web</title>
+
+<!-- PWA -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="application-name" content="Claude Web">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Claude Web">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#202126" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="icon" href="/static/icons/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+
+<style>
+/* =========================================================================
+   1. 토큰
+   ========================================================================= */
+:root {
+  /* 레이아웃 */
+  --project-w: 240px;
+  --session-w: 280px;
+  --nav-w: 300px;
+  --header-h: 56px;
+  --composer-max: 168px;
+  --line-max: 860px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --tap: 44px;              /* 최소 터치 타겟 */
+  --app-h: 100dvh;          /* JS 가 visualViewport 높이로 덮어쓴다 */
+
+  /* 안전 영역 */
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
+  --sa-left: env(safe-area-inset-left, 0px);
+  --sa-right: env(safe-area-inset-right, 0px);
+
+  /* 색 */
+  --bg: #f7f7f8;
+  --panel: #ffffff;
+  --panel2: #fbfbfc;
+  --border: #e3e3e6;
+  --text: #1f2024;
+  --muted: #6b6f76;
+  --user-bg: #e8f0fe;
+  --code-bg: #f3f3f5;
+  --accent: #3d5afe;
+  --accent-soft: #eaeeff;
+  --error-bg: #fdecec;
+  --error-fg: #a11414;
+  --danger: #c62828;
+  --shadow: 0 8px 28px rgba(0, 0, 0, .18);
+}
+
+@supports not (height: 100dvh) {
+  :root { --app-h: 100vh; }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17181c;
+    --panel: #202126;
+    --panel2: #1b1c21;
+    --border: #32343b;
+    --text: #e8e8ea;
+    --muted: #9aa0a8;
+    --user-bg: #26354f;
+    --code-bg: #15161a;
+    --accent: #7c8cff;
+    --accent-soft: #2a2f4a;
+    --error-bg: #3a1f1f;
+    --error-fg: #ff9c9c;
+    --danger: #ef5350;
+    --shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  }
+}
+
+/* =========================================================================
+   2. 리셋
+   ========================================================================= */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;              /* 페이지 전체 스크롤 금지 */
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR",
+        "Apple SD Gothic Neo", "Malgun Gothic", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+img, svg, video { max-width: 100%; height: auto; }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* =========================================================================
+   3. 앱 셸 — 모바일 우선 (단일 컬럼 + 드로어)
+   ========================================================================= */
+#app {
+  height: var(--app-h);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+#backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgba(0, 0, 0, .45);
+}
+body.nav-open #backdrop { display: block; }
+
+/* ---- 내비게이션 (모바일: 드로어) ---- */
+#nav {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  width: min(86vw, 400px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel2);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transform: translateX(-101%);
+  transition: transform .22s ease;
+  padding-top: var(--sa-top);
+  padding-bottom: var(--sa-bottom);
+  padding-left: var(--sa-left);
+}
+body.nav-open #nav { transform: translateX(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  #nav { transition: none; }
+}
+
+.nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--header-h);
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+}
+
+/* 두 패널을 드로어 안에 세로로 쌓는다 */
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+#projects { flex: 0 0 auto; max-height: 45%; border-bottom: 1px solid var(--border); }
+#sessions { flex: 1 1 auto; }
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+}
+.pane-head h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pane-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 6px 8px;
+  -webkit-overflow-scrolling: touch;
+}
+.pane-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px 10px;
+  line-height: 1.7;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tap);
+  padding: 6px 8px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-width: 0;
+}
+.item:hover { background: var(--accent-soft); }
+.item.active { background: var(--accent-soft); font-weight: 600; }
+.item .label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item .count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.item .acts { display: flex; gap: 2px; flex: 0 0 auto; }
+
+.icon-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+}
+.icon-btn svg, #attach-btn svg, #send svg {
+  width: 17px; height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.icon-btn svg { width: 15px; height: 15px; }
+#send svg { width: 19px; height: 19px; }
+.icon-btn:hover { background: var(--border); color: var(--text); }
+.icon-btn.danger:hover { background: var(--danger); color: #fff; }
+
+.btn {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 12px;
+  min-height: 34px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  white-space: nowrap;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { color: #fff; opacity: .9; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+/* =========================================================================
+   4. 대화 영역
+   ========================================================================= */
+#chat {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--bg);
+  position: relative;
+  overflow: hidden;
+}
+
+#chat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--header-h);
+  padding: 0 12px;
+  padding-top: var(--sa-top);
+  padding-right: max(12px, var(--sa-right));
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+#menu-toggle {
+  flex: 0 0 auto;
+  width: var(--tap);
+  height: var(--tap);
+  font-size: 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  display: grid;
+  place-items: center;
+}
+.titles { min-width: 0; flex: 1 1 auto; }
+#chat-title {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#chat-sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#messages {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 14px 12px;
+}
+.wrap {
+  max-width: var(--line-max);
+  margin: 0 auto;
+  min-width: 0;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  min-width: 0;
+}
+.msg.user { align-items: flex-end; }
+.msg .role { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+
+.bubble {
+  max-width: 100%;
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.msg.user .bubble {
+  max-width: 88%;
+  background: var(--user-bg);
+  border-color: transparent;
+}
+.msg.error .bubble {
+  background: var(--error-bg);
+  color: var(--error-fg);
+  border-color: transparent;
+}
+
+.bubble p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bubble p:last-child { margin-bottom: 0; }
+
+/* 긴 코드/로그는 말풍선 안에서만 가로 스크롤 */
+.bubble pre {
+  max-width: 100%;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.bubble pre code {
+  display: block;
+  white-space: pre;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
+}
+
+.thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.thumbs img {
+  width: clamp(84px, 26vw, 120px);
+  height: clamp(84px, 26vw, 120px);
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  cursor: zoom-in;
+}
+.meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+.typing .dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: blink 1.2s infinite;
+}
+.typing .dot:nth-child(2) { animation-delay: .2s; }
+.typing .dot:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .typing .dot { animation: none; } }
+
+/* =========================================================================
+   5. 입력창
+   ========================================================================= */
+#composer-wrap {
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+  padding-left: max(12px, var(--sa-left));
+  padding-right: max(12px, var(--sa-right));
+  padding-bottom: calc(8px + var(--sa-bottom));
+}
+.composer-inner { max-width: var(--line-max); margin: 0 auto; min-width: 0; }
+
+#preview { display: flex; flex-wrap: wrap; gap: 6px; }
+#preview:not(:empty) { margin-bottom: 8px; }
+.chip { position: relative; }
+.chip img {
+  width: 60px; height: 60px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.chip button {
+  position: absolute;
+  top: -7px; right: -7px;
+  width: 22px; height: 22px;
+  border: 0; border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 13px; line-height: 1;
+  display: grid; place-items: center;
+}
+
+.composer { display: flex; gap: 8px; align-items: flex-end; min-width: 0; }
+#attach-btn, #send {
+  flex: 0 0 auto;
+  height: var(--tap);
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+}
+#attach-btn {
+  width: var(--tap);
+  font-size: 18px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+}
+#attach-btn:hover { border-color: var(--accent); }
+#send {
+  width: var(--tap);
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 17px;
+}
+#send .send-text { display: none; }
+#send:disabled { opacity: .5; cursor: default; }
+
+#input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: var(--tap);
+  max-height: var(--composer-max);
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  resize: none;
+  overflow-y: auto;
+  /* 11(패딩) + 20(한 줄) + 11 + 2(테두리) = 44px -> 버튼 높이와 정확히 일치 */
+  line-height: 20px;
+}
+#input:focus { outline: none; border-color: var(--accent); }
+
+.hint { display: none; font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+#drop-hint {
+  display: none;
+  position: absolute;
+  inset: 8px;
+  z-index: 30;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-weight: 700;
+  place-items: center;
+  pointer-events: none;
+}
+body.dragging #drop-hint { display: grid; }
+
+/* =========================================================================
+   6. 모달 / 라이트박스 / 토스트
+   ========================================================================= */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, .5);
+  display: grid;
+  place-items: center;
+  padding: max(16px, var(--sa-top)) 16px calc(16px + var(--sa-bottom));
+}
+.modal {
+  width: 100%;
+  max-width: 420px;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.modal h3 { margin: 0 0 10px; font-size: 16px; }
+.modal p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.modal input {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.modal input:focus { outline: none; border-color: var(--accent); }
+.modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.modal .actions .btn { min-height: var(--tap); padding: 0 16px; }
+
+#lightbox { padding: 0; background: rgba(0, 0, 0, .9); }
+#lightbox img {
+  max-width: 100vw;
+  max-height: 100dvh;
+  max-height: var(--app-h);
+  object-fit: contain;
+}
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(18px + var(--sa-bottom));
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(92vw, 520px);
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--danger);
+  color: #fff;
+  font-size: 13px;
+  box-shadow: var(--shadow);
+  display: none;
+  overflow-wrap: anywhere;
+}
+
+/* =========================================================================
+   7. 태블릿 — 통합 사이드바 + 대화 (2단)
+   ========================================================================= */
+@media (min-width: 900px) {
+  #app { grid-template-columns: var(--nav-w) minmax(0, 1fr); }
+
+  #nav {
+    position: static;
+    width: auto;
+    transform: none;
+    box-shadow: none;
+    transition: none;
+    padding-top: var(--sa-top);
+    padding-bottom: 0;
+  }
+  .nav-head { display: none; }
+  #backdrop { display: none !important; }
+  #menu-toggle { display: none; }
+
+  #projects { max-height: 42%; }
+  #messages { padding: 18px 16px; }
+  .hint { display: block; }
+  #chat-head { padding-left: 16px; }
+}
+
+/* =========================================================================
+   8. 데스크톱 — 3단
+   ========================================================================= */
+@media (min-width: 1200px) {
+  #app { grid-template-columns: var(--project-w) var(--session-w) minmax(0, 1fr); }
+
+  /* 두 패널을 그리드의 직접 자식으로 승격 */
+  #nav { display: contents; }
+  #projects {
+    max-height: none;
+    border-right: 1px solid var(--border);
+    border-bottom: 0;
+    background: var(--panel2);
+  }
+  #sessions {
+    border-right: 1px solid var(--border);
+    background: var(--panel2);
+  }
+
+  #send {
+    width: auto;
+    padding: 0 20px;
+    font-size: 15px;
+  }
+  #send .send-text { display: inline; }
+  #send .send-icon { display: none; }
+
+  .item .acts { display: none; }
+  .item:hover .acts, .item.active .acts { display: flex; }
+  .msg.user .bubble { max-width: 82%; }
+}
+
+/* 마우스가 없는 기기에서는 액션 버튼을 항상 노출 */
+@media (hover: none) {
+  .item .acts { display: flex !important; }
+}
+</style>
+</head>
+
+<body>
+
+<div id="app">
+  <div id="backdrop"></div>
+
+  <nav id="nav" aria-label="프로젝트 및 세션">
+    <div class="nav-head">
+      <span>Claude Web</span>
+      <button class="icon-btn" id="nav-close" aria-label="메뉴 닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <section class="pane" id="projects">
+      <div class="pane-head">
+        <h2>프로젝트</h2>
+        <button class="btn primary" id="new-project">+ 새 프로젝트</button>
+      </div>
+      <div class="pane-list" id="project-list"></div>
+    </section>
+
+    <section class="pane" id="sessions">
+      <div class="pane-head">
+        <h2>세션</h2>
+        <button class="btn primary" id="new-session">+ 새 세션</button>
+      </div>
+      <div class="pane-list" id="session-list"></div>
+    </section>
+  </nav>
+
+  <main id="chat">
+    <header id="chat-head">
+      <button id="menu-toggle" aria-label="메뉴 열기" aria-expanded="false">☰</button>
+      <div class="titles">
+        <div id="chat-title">Claude Web</div>
+        <div id="chat-sub"></div>
+      </div>
+      <button class="btn" id="install-btn" hidden>앱 설치</button>
+    </header>
+
+    <div id="messages"><div class="wrap" id="list"></div></div>
+
+    <div id="composer-wrap">
+      <div class="composer-inner">
+        <div id="preview"></div>
+        <div class="composer">
+          <button id="attach-btn" type="button" aria-label="이미지 첨부">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.9l8.5-8.4"/></svg>
+          </button>
+          <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+          <textarea id="input" rows="1" aria-label="메시지 입력"
+                    placeholder="메시지를 입력하세요..."></textarea>
+          <button id="send" type="button" aria-label="전송">
+            <span class="send-text">전송</span>
+            <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
+          </button>
+        </div>
+        <div class="hint">
+          Enter 전송 · Shift+Enter 줄바꿈 · 드래그&amp;드롭 / Ctrl+V 로 이미지 첨부
+          (최대 {{ max_images }}장, 장당 {{ max_upload_mb }}MB, {{ allowed_ext|join(', ') }})
+        </div>
+      </div>
+    </div>
+
+    <div id="drop-hint">여기에 이미지를 놓으세요</div>
+  </main>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var MAX_IMAGES = {{ max_images }};
+  var MAX_MB = {{ max_upload_mb }};
+  var ALLOWED = {{ allowed_ext|tojson }};
+
+  var state = { projectId: null, sessionId: null, projects: [], sessions: [], busy: false, files: [] };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var listEl = $("list"), scrollEl = $("messages"), inputEl = $("input"),
+      sendEl = $("send"), previewEl = $("preview"), fileInput = $("file-input");
+
+  /* ------------------------------------------------------------------
+     뷰포트 : 모바일 키보드가 올라와도 입력창이 화면 안에 남게 한다
+     ------------------------------------------------------------------ */
+  var vv = window.visualViewport;
+  function syncViewport() {
+    var h = vv ? vv.height : window.innerHeight;
+    document.documentElement.style.setProperty("--app-h", h + "px");
+    if (vv && vv.offsetTop > 0) { window.scrollTo(0, 0); }
+  }
+  if (vv) {
+    vv.addEventListener("resize", syncViewport);
+    vv.addEventListener("scroll", syncViewport);
+  }
+  window.addEventListener("resize", syncViewport);
+  window.addEventListener("orientationchange", function () { setTimeout(syncViewport, 250); });
+  syncViewport();
+
+  /* ---------------------------------------------------------------- 유틸 */
+  function toast(msg) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.style.display = "block";
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function () { t.style.display = "none"; }, 4000);
+  }
+
+  function api(method, url, body) {
+    var opt = { method: method, headers: {} };
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    return fetch(url, opt).then(function (res) {
+      return res.json().catch(function () {
+        return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+      }).then(function (data) {
+        if (!res.ok) { throw new Error((data && data.error) || ("HTTP " + res.status)); }
+        return data;
+      });
+    });
+  }
+
+  function scrollToBottom() { scrollEl.scrollTop = scrollEl.scrollHeight; }
+
+  /* ------------------------------------------------------------- 드로어 */
+  function openNav() {
+    document.body.classList.add("nav-open");
+    $("menu-toggle").setAttribute("aria-expanded", "true");
+  }
+  function closeNav() {
+    document.body.classList.remove("nav-open");
+    $("menu-toggle").setAttribute("aria-expanded", "false");
+  }
+  function toggleNav() {
+    if (document.body.classList.contains("nav-open")) { closeNav(); } else { openNav(); }
+  }
+
+  /* --------------------------------------------------------------- 모달 */
+  function modal(opts) {
+    return new Promise(function (resolve) {
+      var ov = document.createElement("div");
+      ov.className = "overlay";
+      var box = document.createElement("div");
+      box.className = "modal";
+      box.setAttribute("role", "dialog");
+      box.setAttribute("aria-modal", "true");
+
+      var h = document.createElement("h3");
+      h.textContent = opts.title;
+      box.appendChild(h);
+
+      if (opts.message) {
+        var p = document.createElement("p");
+        p.textContent = opts.message;
+        box.appendChild(p);
+      }
+
+      var inp = null;
+      if (opts.input) {
+        inp = document.createElement("input");
+        inp.type = "text";
+        inp.value = opts.value || "";
+        inp.placeholder = opts.placeholder || "";
+        box.appendChild(inp);
+      }
+
+      var acts = document.createElement("div");
+      acts.className = "actions";
+      var cancel = document.createElement("button");
+      cancel.className = "btn";
+      cancel.textContent = "취소";
+      var ok = document.createElement("button");
+      ok.className = "btn " + (opts.danger ? "danger" : "primary");
+      ok.textContent = opts.confirmText || "확인";
+      acts.appendChild(cancel);
+      acts.appendChild(ok);
+      box.appendChild(acts);
+      ov.appendChild(box);
+      document.body.appendChild(ov);
+
+      function done(v) {
+        if (document.body.contains(ov)) { document.body.removeChild(ov); }
+        document.removeEventListener("keydown", onKey);
+        resolve(v);
+      }
+      function onKey(e) {
+        if (e.key === "Escape") { done(null); }
+        if (e.key === "Enter" && opts.input) { e.preventDefault(); ok.click(); }
+      }
+      cancel.onclick = function () { done(null); };
+      ok.onclick = function () { done(opts.input ? (inp.value.trim() || null) : true); };
+      ov.onclick = function (e) { if (e.target === ov) { done(null); } };
+      document.addEventListener("keydown", onKey);
+
+      if (inp) { inp.focus(); inp.select(); } else { ok.focus(); }
+    });
+  }
+
+  function lightbox(src) {
+    var ov = document.createElement("div");
+    ov.className = "overlay";
+    ov.id = "lightbox";
+    var img = document.createElement("img");
+    img.src = src;
+    ov.appendChild(img);
+    ov.onclick = function () { document.body.removeChild(ov); };
+    document.body.appendChild(ov);
+  }
+
+  /* --------------------------------------------------------- 메시지 렌더 */
+  // textContent 만 사용 -> HTML 이 섞여도 실행되지 않는다 (XSS 방지)
+  function renderContent(container, text) {
+    var parts = String(text == null ? "" : text).split("```");
+    parts.forEach(function (part, i) {
+      if (i % 2 === 1) {
+        var lines = part.split("\n");
+        if (lines.length > 1 && /^[A-Za-z0-9_+#.-]*$/.test(lines[0].trim())) { lines.shift(); }
+        var pre = document.createElement("pre");
+        var code = document.createElement("code");
+        code.textContent = lines.join("\n").replace(/\s+$/, "");
+        pre.appendChild(code);
+        container.appendChild(pre);
+      } else {
+        if (!part.replace(/\s/g, "")) { return; }
+        var p = document.createElement("p");
+        p.textContent = part.replace(/^\n+/, "").replace(/\n+$/, "");
+        container.appendChild(p);
+      }
+    });
+    if (!container.childNodes.length) {
+      var e = document.createElement("p");
+      e.textContent = "(빈 응답)";
+      container.appendChild(e);
+    }
+  }
+
+  function addMessage(msg) {
+    var role = msg.role === "user" ? "user" : (msg.role === "error" ? "error" : "assistant");
+    var el = document.createElement("div");
+    el.className = "msg " + role;
+
+    var r = document.createElement("div");
+    r.className = "role";
+    r.textContent = role === "user" ? "나" : (role === "error" ? "오류" : "Claude");
+    el.appendChild(r);
+
+    var bubble = document.createElement("div");
+    bubble.className = "bubble";
+
+    if (msg.attachments && msg.attachments.length) {
+      var th = document.createElement("div");
+      th.className = "thumbs";
+      msg.attachments.forEach(function (a) {
+        var img = document.createElement("img");
+        img.src = "/api/attachments/" + a.id;
+        img.alt = a.original_name;
+        img.title = a.original_name;
+        img.loading = "lazy";
+        img.onclick = function () { lightbox(img.src); };
+        th.appendChild(img);
+      });
+      bubble.appendChild(th);
+    }
+
+    renderContent(bubble, msg.content);
+    el.appendChild(bubble);
+    listEl.appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+
+  function addPending() {
+    var el = document.createElement("div");
+    el.className = "msg assistant";
+    var r = document.createElement("div");
+    r.className = "role";
+    r.textContent = "Claude";
+    el.appendChild(r);
+    var b = document.createElement("div");
+    b.className = "bubble typing";
+    for (var i = 0; i < 3; i++) { b.appendChild(document.createElement("span")).className = "dot"; }
+    b.appendChild(document.createTextNode(" 응답 생성 중..."));
+    el.appendChild(b);
+    listEl.appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+
+  /* ----------------------------------------------------------- 프로젝트 */
+  function loadProjects(selectId) {
+    return api("GET", "/api/projects").then(function (d) {
+      state.projects = d.projects;
+      renderProjects();
+      var target = selectId || state.projectId ||
+        parseInt(localStorage.getItem("last_project_id"), 10);
+      var found = state.projects.filter(function (p) { return p.id === target; })[0];
+      if (!found) { found = state.projects[0]; }
+      if (found) { return selectProject(found.id); }
+      state.projectId = null;
+      state.sessionId = null;
+      state.sessions = [];
+      renderSessions();
+      renderChatHeader();
+      listEl.textContent = "";
+      emptyChat("+ 새 프로젝트 를 눌러 첫 프로젝트를 만드세요.");
+    });
+  }
+
+  var ICON_EDIT = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+  var ICON_TRASH = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>';
+
+  function paneItem(obj, isActive, onSelect, onRename, onDelete) {
+    var it = document.createElement("div");
+    it.className = "item" + (isActive ? " active" : "");
+
+    var lab = document.createElement("div");
+    lab.className = "label";
+    lab.textContent = obj.name;
+    lab.title = obj.name;
+    it.appendChild(lab);
+
+    var cnt = document.createElement("span");
+    cnt.className = "count";
+    cnt.textContent = obj.count;
+    it.appendChild(cnt);
+
+    var acts = document.createElement("div");
+    acts.className = "acts";
+    var ren = document.createElement("button");
+    ren.className = "icon-btn";
+    ren.innerHTML = ICON_EDIT;
+    ren.title = "이름 변경";
+    ren.setAttribute("aria-label", "이름 변경");
+    ren.onclick = function (ev) { ev.stopPropagation(); onRename(); };
+    var del = document.createElement("button");
+    del.className = "icon-btn danger";
+    del.innerHTML = ICON_TRASH;
+    del.title = "삭제";
+    del.setAttribute("aria-label", "삭제");
+    del.onclick = function (ev) { ev.stopPropagation(); onDelete(); };
+    acts.appendChild(ren);
+    acts.appendChild(del);
+    it.appendChild(acts);
+
+    it.onclick = function (e) { if (!e.target.closest(".acts")) { onSelect(); } };
+    return it;
+  }
+
+  function renderProjects() {
+    var box = $("project-list");
+    box.textContent = "";
+    if (!state.projects.length) {
+      var e = document.createElement("div");
+      e.className = "pane-empty";
+      e.textContent = "프로젝트가 없습니다.";
+      box.appendChild(e);
+      return;
+    }
+    state.projects.forEach(function (p) {
+      box.appendChild(paneItem(
+        { name: p.name, count: p.session_count },
+        p.id === state.projectId,
+        function () { selectProject(p.id); },
+        function () { renameProject(p); },
+        function () { deleteProject(p); }
+      ));
+    });
+  }
+
+  function selectProject(pid) {
+    state.projectId = pid;
+    localStorage.setItem("last_project_id", pid);
+    renderProjects();
+    return loadSessions();
+  }
+
+  function newProject() {
+    modal({ title: "새 프로젝트", input: true, placeholder: "예: 포스코 스토리지" })
+      .then(function (name) {
+        if (!name) { return; }
+        return api("POST", "/api/projects", { name: name }).then(function (d) {
+          state.projectId = d.project.id;
+          state.sessionId = null;
+          localStorage.removeItem("last_session_id");
+          return loadProjects(d.project.id);
+        });
+      }).catch(function (e) { toast(e.message); });
+  }
+
+  function renameProject(p) {
+    modal({ title: "프로젝트 이름 변경", input: true, value: p.name })
+      .then(function (name) {
+        if (!name || name === p.name) { return; }
+        return api("PATCH", "/api/projects/" + p.id, { name: name })
+          .then(function () { return loadProjects(state.projectId); });
+      }).catch(function (e) { toast(e.message); });
+  }
+
+  function deleteProject(p) {
+    modal({
+      title: "프로젝트 삭제",
+      message: "'" + p.name + "' 프로젝트를 삭제합니다.\n\n" +
+               "이 프로젝트의 모든 세션(" + p.session_count + "개), 대화 내용, 첨부 이미지가 함께 삭제됩니다.\n" +
+               "되돌릴 수 없습니다.",
+      confirmText: "삭제", danger: true
+    }).then(function (yes) {
+      if (!yes) { return; }
+      return api("DELETE", "/api/projects/" + p.id).then(function () {
+        if (state.projectId === p.id) {
+          state.projectId = null;
+          state.sessionId = null;
+          localStorage.removeItem("last_project_id");
+          localStorage.removeItem("last_session_id");
+        }
+        return loadProjects();
+      });
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  /* --------------------------------------------------------------- 세션 */
+  function loadSessions(selectId) {
+    if (!state.projectId) { state.sessions = []; renderSessions(); return Promise.resolve(); }
+    return api("GET", "/api/projects/" + state.projectId + "/sessions").then(function (d) {
+      state.sessions = d.sessions;
+      renderSessions();
+      var target = selectId || state.sessionId ||
+        parseInt(localStorage.getItem("last_session_id"), 10);
+      var found = state.sessions.filter(function (s) { return s.id === target; })[0];
+      if (!found) { found = state.sessions[0]; }
+      if (found) { return selectSession(found.id, true); }
+      state.sessionId = null;
+      renderSessions();
+      renderChatHeader();
+      listEl.textContent = "";
+      emptyChat("+ 새 세션 을 눌러 대화를 시작하세요.");
+    });
+  }
+
+  function renderSessions() {
+    var box = $("session-list");
+    box.textContent = "";
+    if (!state.projectId) {
+      var e0 = document.createElement("div");
+      e0.className = "pane-empty";
+      e0.textContent = "프로젝트를 먼저 선택하세요.";
+      box.appendChild(e0);
+      return;
+    }
+    if (!state.sessions.length) {
+      var e = document.createElement("div");
+      e.className = "pane-empty";
+      e.textContent = "세션이 없습니다.";
+      box.appendChild(e);
+      return;
+    }
+    state.sessions.forEach(function (s) {
+      box.appendChild(paneItem(
+        { name: s.name, count: s.message_count },
+        s.id === state.sessionId,
+        function () { selectSession(s.id); },
+        function () { renameSession(s); },
+        function () { deleteSession(s); }
+      ));
+    });
+  }
+
+  function selectSession(sid, keepNav) {
+    state.sessionId = sid;
+    localStorage.setItem("last_session_id", sid);
+    renderSessions();
+    renderChatHeader();
+    if (!keepNav) { closeNav(); }   // 모바일: 세션을 고르면 드로어를 닫는다
+    return loadMessages();
+  }
+
+  function newSession() {
+    if (!state.projectId) { toast("프로젝트를 먼저 선택하세요."); return; }
+    modal({ title: "새 세션", input: true, value: "새 대화" }).then(function (name) {
+      if (!name) { return; }
+      return api("POST", "/api/projects/" + state.projectId + "/sessions", { name: name })
+        .then(function (d) {
+          state.sessionId = d.session.id;
+          closeNav();
+          return loadSessions(d.session.id).then(function () {
+            return loadProjects(state.projectId);
+          });
+        });
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  function renameSession(s) {
+    modal({ title: "세션 이름 변경", input: true, value: s.name }).then(function (name) {
+      if (!name || name === s.name) { return; }
+      return api("PATCH", "/api/sessions/" + s.id, { name: name })
+        .then(function () { return loadSessions(state.sessionId); });
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  function deleteSession(s) {
+    modal({
+      title: "세션 삭제",
+      message: "'" + s.name + "' 세션을 삭제합니다.\n대화 내용과 첨부 이미지가 함께 삭제됩니다.",
+      confirmText: "삭제", danger: true
+    }).then(function (yes) {
+      if (!yes) { return; }
+      return api("DELETE", "/api/sessions/" + s.id).then(function () {
+        if (state.sessionId === s.id) {
+          state.sessionId = null;
+          localStorage.removeItem("last_session_id");
+        }
+        return loadSessions().then(function () { return loadProjects(state.projectId); });
+      });
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  /* --------------------------------------------------------------- 대화 */
+  function renderChatHeader() {
+    var p = state.projects.filter(function (x) { return x.id === state.projectId; })[0];
+    var s = state.sessions.filter(function (x) { return x.id === state.sessionId; })[0];
+    $("chat-title").textContent = s ? s.name : "Claude Web";
+    $("chat-sub").textContent = p ? (s ? p.name : p.name + " — 세션 없음") : "";
+    var disabled = !state.sessionId || state.busy;
+    sendEl.disabled = disabled;
+    inputEl.disabled = disabled;
+    $("attach-btn").disabled = disabled;
+    inputEl.placeholder = state.sessionId ? "메시지를 입력하세요..." : "세션을 선택하세요";
+  }
+
+  function emptyChat(text) {
+    var d = document.createElement("div");
+    d.className = "pane-empty";
+    d.style.textAlign = "center";
+    d.textContent = text;
+    listEl.appendChild(d);
+  }
+
+  function loadMessages() {
+    if (!state.sessionId) { return Promise.resolve(); }
+    return api("GET", "/api/sessions/" + state.sessionId + "/messages").then(function (d) {
+      listEl.textContent = "";
+      if (!d.messages.length) { emptyChat("이 세션의 첫 질문을 입력하세요."); }
+      d.messages.forEach(addMessage);
+      scrollToBottom();
+    });
+  }
+
+  function setBusy(b) {
+    state.busy = b;
+    renderChatHeader();
+    if (!b) { inputEl.focus(); }
+  }
+
+  function send() {
+    if (state.busy || !state.sessionId) { return; }
+    var text = inputEl.value.trim();
+    if (!text && !state.files.length) { return; }
+
+    var fd = new FormData();
+    fd.append("message", text);
+    state.files.forEach(function (f) { fd.append("images", f, f.name); });
+
+    var stub = addMessage({
+      role: "user",
+      content: text || "첨부한 이미지를 확인해줘.",
+      attachments: []
+    });
+    if (state.files.length) {
+      var th = document.createElement("div");
+      th.className = "thumbs";
+      state.files.forEach(function (f) {
+        var img = document.createElement("img");
+        img.src = URL.createObjectURL(f);
+        th.appendChild(img);
+      });
+      var bub = stub.querySelector(".bubble");
+      bub.insertBefore(th, bub.firstChild);
+    }
+
+    inputEl.value = "";
+    autoGrow();
+    clearFiles();
+    setBusy(true);
+    var pending = addPending();
+
+    fetch("/api/sessions/" + state.sessionId + "/messages", { method: "POST", body: fd })
+      .then(function (res) {
+        return res.json().catch(function () {
+          return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+        });
+      })
+      .then(function (data) {
+        if (listEl.contains(pending)) { listEl.removeChild(pending); }
+        if (listEl.contains(stub)) { listEl.removeChild(stub); }
+        if (data.messages) {
+          data.messages.forEach(addMessage);
+        } else {
+          addMessage({ role: "user", content: text, attachments: [] });
+          addMessage({ role: "error", content: data.error || "알 수 없는 오류", attachments: [] });
+        }
+        if (data.elapsed) {
+          var m = document.createElement("div");
+          m.className = "meta";
+          m.textContent = data.elapsed + "초 · " + (data.mode || "");
+          listEl.lastChild.appendChild(m);
+        }
+        scrollToBottom();
+        return loadSessions(state.sessionId);
+      })
+      .catch(function (err) {
+        if (listEl.contains(pending)) { listEl.removeChild(pending); }
+        addMessage({ role: "error", content: "네트워크 오류: " + err.message, attachments: [] });
+      })
+      .then(function () { setBusy(false); });
+  }
+
+  /* ----------------------------------------------------------- 첨부파일 */
+  function addFiles(files) {
+    Array.prototype.slice.call(files).forEach(function (f) {
+      var ext = (f.name.split(".").pop() || "").toLowerCase();
+      if (ALLOWED.indexOf(ext) < 0) { toast("지원하지 않는 형식입니다: " + f.name); return; }
+      if (f.size > MAX_MB * 1024 * 1024) { toast("파일이 너무 큽니다: " + f.name); return; }
+      if (state.files.length >= MAX_IMAGES) {
+        toast("이미지는 최대 " + MAX_IMAGES + "장까지 첨부할 수 있습니다.");
+        return;
+      }
+      state.files.push(f);
+    });
+    renderPreview();
+  }
+
+  function clearFiles() { state.files = []; renderPreview(); }
+
+  function renderPreview() {
+    previewEl.textContent = "";
+    state.files.forEach(function (f, idx) {
+      var chip = document.createElement("div");
+      chip.className = "chip";
+      var img = document.createElement("img");
+      img.src = URL.createObjectURL(f);
+      img.title = f.name;
+      img.alt = f.name;
+      var x = document.createElement("button");
+      x.textContent = "×";
+      x.setAttribute("aria-label", f.name + " 첨부 취소");
+      x.onclick = function () { state.files.splice(idx, 1); renderPreview(); };
+      chip.appendChild(img);
+      chip.appendChild(x);
+      previewEl.appendChild(chip);
+    });
+  }
+
+  function autoGrow() {
+    inputEl.style.height = "auto";
+    var max = parseInt(getComputedStyle(inputEl).maxHeight, 10) || 168;
+    inputEl.style.height = Math.min(inputEl.scrollHeight, max) + "px";
+  }
+
+  /* -------------------------------------------------------------- 이벤트 */
+  $("new-project").onclick = newProject;
+  $("new-session").onclick = newSession;
+  $("menu-toggle").onclick = toggleNav;
+  $("nav-close").onclick = closeNav;
+  $("backdrop").onclick = closeNav;
+  sendEl.onclick = send;
+  $("attach-btn").onclick = function () { fileInput.click(); };
+  fileInput.onchange = function () { addFiles(fileInput.files); fileInput.value = ""; };
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && document.body.classList.contains("nav-open")) { closeNav(); }
+  });
+
+  inputEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+  });
+  inputEl.addEventListener("input", autoGrow);
+  inputEl.addEventListener("focus", function () {
+    setTimeout(function () { scrollToBottom(); syncViewport(); }, 150);
+  });
+
+  // 클립보드 붙여넣기
+  document.addEventListener("paste", function (e) {
+    if (!state.sessionId) { return; }
+    var items = (e.clipboardData || {}).items || [];
+    var imgs = [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].kind === "file" && items[i].type.indexOf("image/") === 0) {
+        var f = items[i].getAsFile();
+        if (f) {
+          if (!/\.(png|jpe?g|webp|gif)$/i.test(f.name || "")) {
+            var ext = f.type.split("/")[1].replace("jpeg", "jpg");
+            f = new File([f], "clipboard-" + Date.now() + "." + ext, { type: f.type });
+          }
+          imgs.push(f);
+        }
+      }
+    }
+    if (imgs.length) { e.preventDefault(); addFiles(imgs); }
+  });
+
+  // 드래그 & 드롭
+  var dragDepth = 0;
+  window.addEventListener("dragenter", function (e) {
+    if (!state.sessionId) { return; }
+    e.preventDefault();
+    dragDepth++;
+    document.body.classList.add("dragging");
+  });
+  window.addEventListener("dragover", function (e) { e.preventDefault(); });
+  window.addEventListener("dragleave", function () {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) { document.body.classList.remove("dragging"); }
+  });
+  window.addEventListener("drop", function (e) {
+    e.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove("dragging");
+    if (!state.sessionId) { toast("세션을 먼저 선택하세요."); return; }
+    if (e.dataTransfer && e.dataTransfer.files.length) { addFiles(e.dataTransfer.files); }
+  });
+
+  /* ------------------------------------------------------------ PWA */
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("/sw.js").catch(function () { /* 무시 */ });
+    });
+  }
+
+  var deferredPrompt = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    deferredPrompt = e;
+    $("install-btn").hidden = false;
+  });
+  $("install-btn").onclick = function () {
+    if (!deferredPrompt) { return; }
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(function () {
+      deferredPrompt = null;
+      $("install-btn").hidden = true;
+    });
+  };
+  window.addEventListener("appinstalled", function () {
+    deferredPrompt = null;
+    $("install-btn").hidden = true;
+  });
+
+  /* ------------------------------------------------------------- 시작 */
+  renderChatHeader();
+  loadProjects().catch(function (e) { toast("초기 로딩 실패: " + e.message); });
+})();
+</script>
+</body>
+</html>
