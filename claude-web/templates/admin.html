@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>관리자 · Claude Web</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#202126" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="/static/shared.css">
+</head>
+<body>
+
+<header class="top">
+  <span class="brand">Claude Web 관리자</span>
+  <span class="spacer"></span>
+  <a class="btn sm" href="/" style="text-decoration:none;">채팅으로</a>
+  <a class="btn sm" href="/logout" style="text-decoration:none;">로그아웃</a>
+</header>
+
+<nav class="tabs">
+  <a href="/admin/dashboard" class="{{ 'active' if tab == 'dashboard' }}">Dashboard</a>
+  <a href="/admin/users" class="{{ 'active' if tab == 'users' }}">Users</a>
+  <a href="/admin/claude" class="{{ 'active' if tab == 'claude' }}">Claude 설정</a>
+  <a href="/admin/system" class="{{ 'active' if tab == 'system' }}">System</a>
+</nav>
+
+<main class="page" id="page" data-tab="{{ tab }}">
+  <div id="content"></div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var TAB = document.getElementById("page").dataset.tab;
+  var content = document.getElementById("content");
+  var csrf = null;
+
+  /* ----------------------------------------------------------- DOM 헬퍼 */
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (k) {
+      if (k === "class") { n.className = props[k]; }
+      else if (k === "text") { n.textContent = props[k]; }
+      else if (k === "html") { /* 사용 금지 */ }
+      else if (k.slice(0, 2) === "on") { n[k] = props[k]; }
+      else if (props[k] !== null && props[k] !== undefined) { n.setAttribute(k, props[k]); }
+    });
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined) { return; }
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+
+  function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
+
+  function notify(msg, kind) {
+    var box = el("div", { class: "alert " + (kind || "ok"), role: "alert", text: msg });
+    content.insertBefore(box, content.firstChild);
+    window.scrollTo(0, 0);
+    setTimeout(function () { if (box.parentNode) { box.parentNode.removeChild(box); } }, 6000);
+  }
+
+  /* --------------------------------------------------------------- API */
+  function api(method, url, body) {
+    var opt = { method: method, headers: {}, credentials: "same-origin" };
+    if (csrf) { opt.headers["X-CSRF-Token"] = csrf; }
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    return fetch(url, opt).then(function (res) {
+      return res.json().catch(function () {
+        return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+      }).then(function (data) {
+        if (!res.ok) { throw new Error((data && data.error) || ("HTTP " + res.status)); }
+        return data;
+      });
+    });
+  }
+
+  function loadCsrf() {
+    return fetch("/api/me", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { csrf = d.csrf_token; });
+  }
+
+  /* ------------------------------------------------------------ 공통 UI */
+  function block(title, desc, kids) {
+    return el("section", { class: "block" },
+      [el("h2", { text: title })]
+        .concat(desc ? [el("p", { class: "desc", text: desc })] : [])
+        .concat(kids || []));
+  }
+
+  function badge(ok, label, kind) {
+    return el("span", { class: "badge " + (kind || (ok ? "ok" : "bad")) },
+      [el("span", { class: "dot" }), label]);
+  }
+
+  function stat(n, label) {
+    return el("div", { class: "stat" },
+      [el("div", { class: "n", text: String(n) }), el("div", { class: "l", text: label })]);
+  }
+
+  function kv(pairs) {
+    var dl = el("dl", { class: "kv" });
+    pairs.forEach(function (p) {
+      if (p[1] === null || p[1] === undefined) { return; }
+      dl.appendChild(el("dt", { text: p[0] }));
+      dl.appendChild(el("dd", { class: p[2] ? "mono" : "", text: String(p[1]) }));
+    });
+    return dl;
+  }
+
+  function table(headers, rows) {
+    var thead = el("tr", {}, headers.map(function (h) { return el("th", { text: h }); }));
+    var tbody = el("tbody", {}, rows);
+    return el("div", { class: "table-wrap" },
+      [el("table", {}, [el("thead", {}, [thead]), tbody])]);
+  }
+
+  function bytes(n) {
+    if (!n && n !== 0) { return "-"; }
+    if (n < 1024) { return n + " B"; }
+    if (n < 1048576) { return (n / 1024).toFixed(1) + " KB"; }
+    return (n / 1048576).toFixed(1) + " MB";
+  }
+
+  function warningsBlock(list) {
+    if (!list || !list.length) { return null; }
+    return el("section", { class: "block" },
+      [el("h2", { text: "확인이 필요한 항목" })].concat(list.map(function (w) {
+        return el("div", { class: "alert warn", text: w });
+      })));
+  }
+
+  /* --------------------------------------------------- 연결 테스트 (공용) */
+  function testResultBox() {
+    return el("div", { id: "test-result" });
+  }
+
+  function runConnectionTest(btn) {
+    var out = document.getElementById("test-result");
+    btn.disabled = true;
+    btn.textContent = "테스트 중...";
+    clear(out);
+    out.appendChild(el("p", { class: "muted", text: "Claude 에 짧은 요청을 보내는 중입니다..." }));
+
+    api("POST", "/api/admin/claude/test", {}).then(function (d) {
+      clear(out);
+      var info = d.info || {};
+      var pairs = [
+        ["상태", d.ok ? "정상" : "실패"],
+        ["Provider", info.label || info.provider || "-"]
+      ];
+      if (info.provider === "cli") {
+        pairs.push(["CLI Path", info.resolved_path || info.cli_path, true]);
+        pairs.push(["Version", info.version || "(확인 불가)"]);
+        pairs.push(["Working Directory", info.workdir, true]);
+      } else {
+        pairs.push(["Base URL", info.api_base_url, true]);
+        pairs.push(["Model", info.api_model, true]);
+        pairs.push(["API Key", info.has_api_key ? "설정됨" : "없음"]);
+      }
+      pairs.push(["인증 상태", d.ok ? "정상" : "확인 실패"]);
+      pairs.push(["세션 resume", info.supports_resume ? "지원" : "미지원 (대화 기록을 프롬프트로 전달)"]);
+
+      out.appendChild(el("div", { class: "row", style: "margin-bottom:12px;" },
+        [badge(d.ok, d.ok ? "연결 정상" : "연결 실패")]));
+      out.appendChild(kv(pairs));
+      if (d.ok && d.reply) {
+        out.appendChild(el("p", { class: "muted", style: "margin-top:10px;",
+                                  text: "응답: " + d.reply }));
+      }
+      if (!d.ok && d.error) {
+        out.appendChild(el("div", { class: "alert error", style: "margin-top:12px;" },
+          [el("pre", { text: d.error })]));
+      }
+    }).catch(function (e) {
+      clear(out);
+      out.appendChild(el("div", { class: "alert error", text: e.message }));
+    }).then(function () {
+      btn.disabled = false;
+      btn.textContent = "Claude 연결 테스트";
+    });
+  }
+
+  /* ------------------------------------------------------------ 대시보드 */
+  function renderDashboard() {
+    return api("GET", "/api/admin/summary").then(function (d) {
+      clear(content);
+      var c = d.counts, p = d.provider;
+
+      var w = warningsBlock(d.warnings);
+      if (w) { content.appendChild(w); }
+
+      content.appendChild(block("상태", null, [
+        el("div", { class: "row", style: "margin-bottom:14px;" }, [
+          badge(true, "Database 정상"),
+          badge(true, (p.label || p.provider) + " 사용 중", "ok"),
+          p.provider === "cli"
+            ? badge(p.found, p.found ? ("CLI " + (p.version || "확인됨")) : "CLI 경로 확인 필요")
+            : badge(p.has_api_key, p.has_api_key ? "API Key 설정됨" : "API Key 없음")
+        ]),
+        el("button", { class: "btn", onclick: function () { runConnectionTest(this); } },
+          ["Claude 연결 테스트"]),
+        testResultBox()
+      ]));
+
+      content.appendChild(block("사용 현황", null, [
+        el("div", { class: "stats" }, [
+          stat(c.users, "사용자"),
+          stat(c.projects, "프로젝트"),
+          stat(c.sessions, "전체 세션"),
+          stat(c.sessions_public, "Public 세션"),
+          stat(c.sessions_private, "Private 세션"),
+          stat(c.messages, "메시지")
+        ])
+      ]));
+
+      if (c.sessions_legacy) {
+        content.appendChild(block("소유자 없는 세션",
+          "로그인 도입 전에 만들어진 세션입니다. public 으로 이관되어 있고 소유자가 없어 " +
+          "일반 사용자가 이름 변경/삭제를 할 수 없습니다. 아래에서 소유자를 지정하세요.",
+          [el("div", { id: "legacy-box", class: "muted", text: "불러오는 중..." })]));
+        loadLegacySessions();
+      }
+    });
+  }
+
+  function loadLegacySessions() {
+    Promise.all([api("GET", "/api/admin/sessions"), api("GET", "/api/admin/users")])
+      .then(function (r) {
+        var box = document.getElementById("legacy-box");
+        if (!box) { return; }
+        var users = r[1].users;
+        var rows = r[0].sessions.filter(function (s) { return s.owner_id === null; })
+          .map(function (s) {
+            var sel = el("select", {});
+            sel.appendChild(el("option", { value: "", text: "(선택)" }));
+            users.forEach(function (u) {
+              sel.appendChild(el("option", { value: String(u.id),
+                                             text: u.display_name + " (" + u.username + ")" }));
+            });
+            var btn = el("button", { class: "btn sm", onclick: function () {
+              if (!sel.value) { notify("사용자를 선택하세요.", "warn"); return; }
+              api("PATCH", "/api/admin/sessions/" + s.id, { owner_id: parseInt(sel.value, 10) })
+                .then(function () { notify("소유자를 지정했습니다."); render(); })
+                .catch(function (e) { notify(e.message, "error"); });
+            } }, ["소유자 지정"]);
+            return el("tr", {}, [
+              el("td", { text: "#" + s.id }),
+              el("td", { class: "wrap", text: s.name }),
+              el("td", { class: "wrap", text: s.project_name }),
+              el("td", { text: String(s.message_count) }),
+              el("td", {}, [sel]),
+              el("td", {}, [btn])
+            ]);
+          });
+        clear(box);
+        box.className = "";
+        box.appendChild(table(["ID", "세션", "프로젝트", "메시지", "소유자로 지정", ""], rows));
+      });
+  }
+
+  /* -------------------------------------------------------------- 사용자 */
+  function renderUsers() {
+    return api("GET", "/api/admin/users").then(function (d) {
+      clear(content);
+
+      /* 새 사용자 */
+      var fUser = el("input", { type: "text", placeholder: "아이디", autocapitalize: "none" });
+      var fName = el("input", { type: "text", placeholder: "표시 이름 (비우면 아이디)" });
+      var fPass = el("input", { type: "password", placeholder: "비밀번호 (8자 이상)",
+                                autocomplete: "new-password" });
+      var fRole = el("select", {}, [
+        el("option", { value: "user", text: "user" }),
+        el("option", { value: "admin", text: "admin" })
+      ]);
+      var create = el("button", { class: "btn primary", onclick: function () {
+        api("POST", "/api/admin/users", {
+          username: fUser.value, display_name: fName.value,
+          password: fPass.value, role: fRole.value
+        }).then(function () { notify("사용자를 만들었습니다."); render(); })
+          .catch(function (e) { notify(e.message, "error"); });
+      } }, ["사용자 생성"]);
+
+      content.appendChild(block("사용자 생성", null, [
+        el("div", { class: "row" }, [fUser, fName, fPass, fRole, create])
+      ]));
+
+      /* 목록 */
+      var rows = d.users.map(function (u) { return userRow(u); });
+      content.appendChild(block("사용자 (" + d.users.length + ")", null, [
+        table(["ID", "아이디", "표시 이름", "권한", "상태", "세션", "마지막 로그인", "작업"], rows)
+      ]));
+    });
+  }
+
+  function userRow(u) {
+    function patch(body, msg) {
+      api("PATCH", "/api/admin/users/" + u.id, body)
+        .then(function () { notify(msg); render(); })
+        .catch(function (e) { notify(e.message, "error"); });
+    }
+
+    var roleSel = el("select", { class: "btn sm", onchange: function () {
+      patch({ role: this.value }, "권한을 변경했습니다.");
+    } }, [
+      el("option", { value: "user", text: "user" }),
+      el("option", { value: "admin", text: "admin" })
+    ]);
+    roleSel.value = u.role;
+
+    var toggle = el("button", { class: "btn sm" + (u.is_active ? " danger" : ""),
+      onclick: function () {
+        patch({ is_active: !u.is_active }, u.is_active ? "비활성화했습니다." : "활성화했습니다.");
+      } }, [u.is_active ? "비활성화" : "활성화"]);
+
+    var rename = el("button", { class: "btn sm", onclick: function () {
+      var v = window.prompt("표시 이름", u.display_name);
+      if (v !== null) { patch({ display_name: v }, "표시 이름을 변경했습니다."); }
+    } }, ["이름"]);
+
+    var pw = el("button", { class: "btn sm", onclick: function () {
+      var v = window.prompt("새 비밀번호 (8자 이상)");
+      if (!v) { return; }
+      api("POST", "/api/admin/users/" + u.id + "/password", { password: v })
+        .then(function () { notify("비밀번호를 초기화했습니다."); })
+        .catch(function (e) { notify(e.message, "error"); });
+    } }, ["비밀번호"]);
+
+    var del = el("button", { class: "btn sm danger", onclick: function () {
+      if (!window.confirm("'" + u.username + "' 계정을 삭제합니다.\n" +
+                          "이 사용자가 만든 세션과 메시지는 남고 작성자 표시만 사라집니다.")) { return; }
+      api("DELETE", "/api/admin/users/" + u.id)
+        .then(function () { notify("삭제했습니다."); render(); })
+        .catch(function (e) { notify(e.message, "error"); });
+    } }, ["삭제"]);
+
+    return el("tr", {}, [
+      el("td", { text: String(u.id) }),
+      el("td", { class: "mono", text: u.username }),
+      el("td", { class: "wrap", text: u.display_name }),
+      el("td", {}, [roleSel]),
+      el("td", {}, [badge(u.is_active, u.is_active ? "활성" : "비활성")]),
+      el("td", { text: String(u.session_count) }),
+      el("td", { class: "muted", text: u.last_login_at || "-" }),
+      el("td", {}, [el("div", { class: "row" }, [rename, pw, toggle, del])])
+    ]);
+  }
+
+  /* --------------------------------------------------------- Claude 설정 */
+  function renderClaude() {
+    return api("GET", "/api/admin/settings").then(function (d) {
+      clear(content);
+      var inputs = {};
+      var defs = d.settings;
+      var byKey = {};
+      defs.forEach(function (s) { byKey[s.key] = s; });
+
+      function fieldFor(s) {
+        var input;
+        if (s.type === "choice") {
+          input = el("select", {});
+          s.choices.forEach(function (c) {
+            input.appendChild(el("option", { value: c, text: c === "cli" ? "Claude CLI" : "Claude API" }));
+          });
+          input.value = s.value;
+          input.onchange = function () { applyGroupVisibility(input.value); };
+        } else if (s.type === "bool") {
+          input = el("select", {}, [
+            el("option", { value: "1", text: "사용" }),
+            el("option", { value: "0", text: "사용 안 함" })
+          ]);
+          input.value = String(s.value) === "0" ? "0" : "1";
+        } else if (s.type === "secret") {
+          input = el("input", { type: "password", autocomplete: "new-password",
+                                placeholder: s.has_value ? s.preview : "(설정되지 않음)" });
+        } else if (s.type === "int") {
+          input = el("input", { type: "number", min: s.min, max: s.max, value: s.value });
+        } else {
+          input = el("input", { type: "text", value: s.value, class: "mono" });
+        }
+        inputs[s.key] = input;
+
+        var kids = [el("label", { text: s.label }), input];
+        if (s.help) { kids.push(el("div", { class: "help", text: s.help })); }
+        if (s.restart) { kids.push(el("div", { class: "help", text: "※ 변경 시 서버 재시작 필요" })); }
+        if (s.type === "secret" && s.has_value) {
+          kids.push(el("button", { class: "btn sm", style: "margin-top:8px;",
+            onclick: function () {
+              if (!window.confirm("저장된 값을 지웁니다.")) { return; }
+              api("POST", "/api/admin/settings/" + s.key + "/clear", {})
+                .then(function () { notify("삭제했습니다."); render(); })
+                .catch(function (e) { notify(e.message, "error"); });
+            } }, ["저장된 값 삭제"]));
+        }
+        return el("div", { class: "field", "data-group": s.group || "" }, kids);
+      }
+
+      function applyGroupVisibility(provider) {
+        var nodes = content.querySelectorAll(".field[data-group]");
+        for (var i = 0; i < nodes.length; i++) {
+          var g = nodes[i].getAttribute("data-group");
+          nodes[i].classList.toggle("hidden", g !== "" && g !== provider);
+        }
+      }
+
+      content.appendChild(block("Claude 연결 방식",
+        "배포와 분리된 운영 설정입니다. DB 에 저장되며 저장 즉시 다음 요청부터 적용됩니다.",
+        [fieldFor(byKey.claude_provider)]));
+
+      content.appendChild(block("Claude CLI", null,
+        ["claude_cli_path", "claude_workdir", "claude_extra_args", "claude_use_resume"]
+          .map(function (k) { return fieldFor(byKey[k]); })));
+
+      var apiKids = ["claude_api_key", "claude_api_model", "claude_api_base_url"]
+        .map(function (k) { return fieldFor(byKey[k]); });
+      if (!d.encrypted) {
+        apiKids.unshift(el("div", { class: "alert warn",
+          text: "cryptography 패키지가 설치되어 있지 않아 API Key 가 DB 에 평문으로 저장됩니다. " +
+                "(DB 파일 권한은 0600 으로 제한됩니다) pip install cryptography 를 권장합니다." }));
+      }
+      content.appendChild(block("Claude API", "지금 쓰지 않더라도 미리 설정해 둘 수 있습니다.",
+        apiKids));
+
+      content.appendChild(block("실행 제한", null,
+        ["claude_timeout", "max_concurrent_claude"].map(function (k) { return fieldFor(byKey[k]); })));
+
+      var save = el("button", { class: "btn primary", onclick: function () {
+        var payload = {};
+        Object.keys(inputs).forEach(function (k) { payload[k] = inputs[k].value; });
+        var btn = this;
+        btn.disabled = true;
+        api("POST", "/api/admin/settings", { settings: payload })
+          .then(function (r) {
+            notify(r.changed.length
+              ? ("저장했습니다: " + r.changed.join(", "))
+              : "변경된 내용이 없습니다.");
+            if (r.changed.length) { render(); }
+          })
+          .catch(function (e) { notify(e.message, "error"); })
+          .then(function () { btn.disabled = false; });
+      } }, ["설정 저장"]);
+
+      content.appendChild(block("연결 테스트",
+        "실제로 Claude 에 \"Respond only with OK\" 요청을 보냅니다.", [
+        el("div", { class: "row" }, [
+          save,
+          el("button", { class: "btn", onclick: function () { runConnectionTest(this); } },
+            ["Claude 연결 테스트"])
+        ]),
+        testResultBox()
+      ]));
+
+      applyGroupVisibility(inputs.claude_provider.value);
+    });
+  }
+
+  /* --------------------------------------------------------------- 시스템 */
+  function renderSystem() {
+    return Promise.all([api("GET", "/api/admin/summary"), api("GET", "/api/admin/audit?limit=100")])
+      .then(function (r) {
+        clear(content);
+        var d = r[0], s = d.system, p = d.provider;
+
+        var w = warningsBlock(d.warnings);
+        if (w) { content.appendChild(w); }
+
+        content.appendChild(block("저장소", null, [
+          kv([
+            ["DB 경로", s.database_path, true],
+            ["DB 크기", bytes(s.database_size)],
+            ["업로드 경로", s.upload_dir, true],
+            ["백업 경로", s.backup_dir, true],
+            ["디스크", s.disk ? (s.disk.free_gb + " GB 남음 / " + s.disk.total_gb + " GB") : "-"],
+            ["업로드 제한", s.max_upload_mb + " MB × 최대 " + s.max_images_per_message + "장"]
+          ])
+        ]));
+
+        content.appendChild(block("Claude Provider", null, [
+          kv(p.provider === "cli" ? [
+            ["Provider", p.label],
+            ["CLI Path", p.resolved_path || p.cli_path, true],
+            ["실행 파일", p.found ? "확인됨" : "찾을 수 없음"],
+            ["Version", p.version || "(확인 불가)"],
+            ["Working Directory", p.workdir, true],
+            ["Timeout", p.timeout + "초"],
+            ["최대 동시 실행", p.max_concurrent],
+            ["세션 resume", p.supports_resume ? "사용" : "사용 안 함"]
+          ] : [
+            ["Provider", p.label],
+            ["Base URL", p.api_base_url, true],
+            ["Model", p.api_model, true],
+            ["API Key", p.has_api_key ? "설정됨 (값은 표시하지 않음)" : "없음"],
+            ["Timeout", p.timeout + "초"],
+            ["최대 동시 실행", p.max_concurrent]
+          ])
+        ]));
+
+        content.appendChild(block("보안", null, [
+          kv([
+            ["접속 방식", s.scheme],
+            ["SESSION_COOKIE_SECURE", s.session_cookie_secure ? "on" : "off"],
+            ["TRUST_PROXY", s.trust_proxy ? "on" : "off"],
+            ["SECRET_KEY", s.secret_key_ephemeral ? "임시값 (재시작 시 로그아웃)" : ".env 에 고정됨"],
+            ["설정 암호화", s.settings_encrypted ? "사용 (cryptography)" : "미사용 (DB 파일 권한 0600)"]
+          ])
+        ]));
+
+        var logs = r[1].logs.map(function (l) {
+          return el("tr", {}, [
+            el("td", { class: "muted", text: l.created_at }),
+            el("td", { class: "mono", text: l.username || "-" }),
+            el("td", { text: l.action }),
+            el("td", { class: "wrap muted", text: [l.target_type, l.target_id].filter(Boolean).join(" ") }),
+            el("td", { class: "wrap muted", text: l.details || "" })
+          ]);
+        });
+        content.appendChild(block("감사 로그 (최근 100건)",
+          "로그인, 계정/권한 변경, 설정 변경, 세션 삭제 등 운영상 중요한 변경만 기록합니다. " +
+          "대화 내용과 비밀번호, API Key 는 기록하지 않습니다.",
+          [table(["시각", "사용자", "동작", "대상", "상세"], logs)]));
+      });
+  }
+
+  /* ----------------------------------------------------------------- 실행 */
+  function render() {
+    clear(content);
+    content.appendChild(el("p", { class: "muted", text: "불러오는 중..." }));
+    var fn = TAB === "users" ? renderUsers
+      : TAB === "claude" ? renderClaude
+      : TAB === "system" ? renderSystem
+      : renderDashboard;
+    fn().catch(function (e) {
+      clear(content);
+      content.appendChild(el("div", { class: "alert error", text: e.message }));
+    });
+  }
+
+  loadCsrf().then(render).catch(function () {
+    clear(content);
+    content.appendChild(el("div", { class: "alert error", text: "세션이 만료되었습니다. 다시 로그인하세요." }));
+  });
+})();
+</script>
+</body>
+</html>
