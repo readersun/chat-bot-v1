@@ -1,0 +1,82 @@
+# /etc/nginx/sites-available/claude-web   (사내 인증서 HTTPS)
+#
+# 회사 내부 도메인이라 Let's Encrypt 의 HTTP-01 검증이 보통 불가능하다
+# (외부 인터넷에서 그 도메인에 닿지 않는다). 그래서 둘 중 하나를 쓴다.
+#
+#   1) 사내 CA 가 발급한 서버 인증서  <- 권장. 사내 PC 에 CA 가 이미 배포돼 있다
+#   2) DNS-01 방식의 공인 인증서       <- 외부 DNS 를 쓰는 도메인일 때만
+#
+# 자체 서명 인증서는 브라우저 경고가 뜨고 PWA "앱 설치" 와 서비스워커가
+# 동작하지 않는다. 사내 CA 를 쓰거나, 아니면 그냥 HTTP 로 가는 편이 낫다.
+#
+# 인증서 파일 배치 예:
+#   sudo install -d -m 0755 /etc/ssl/claude-web
+#   sudo install -m 0644 fullchain.pem /etc/ssl/claude-web/fullchain.pem
+#   sudo install -m 0600 privkey.pem   /etc/ssl/claude-web/privkey.pem
+#   (fullchain.pem = 서버 인증서 + 중간 CA. 중간 CA 를 빼면 일부 기기에서 실패한다)
+#
+# HTTPS 로 서비스하면 .env 에서 SESSION_COOKIE_SECURE=1 로 올리세요.
+
+upstream claude_web {
+    server 127.0.0.1:8080 fail_timeout=0;
+    keepalive 8;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name claude.example.local;   # <-- 사내 호스트명
+
+    # 평문 접속은 전부 HTTPS 로 보낸다.
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name claude.example.local;   # <-- 사내 호스트명
+
+    ssl_certificate     /etc/ssl/claude-web/fullchain.pem;
+    ssl_certificate_key /etc/ssl/claude-web/privkey.pem;
+
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # 사내 CA 인증서라면 HSTS 는 신중히. 한 번 걸면 그 호스트는
+    # max-age 동안 HTTP 로 되돌릴 수 없다.
+    # add_header Strict-Transport-Security "max-age=31536000" always;
+
+    client_max_body_size 52m;   # 앱 한도 51MiB 보다 크게
+    client_body_timeout 120s;
+    server_tokens off;
+
+    gzip on;
+    gzip_types text/plain text/css application/javascript application/json
+               application/manifest+json image/svg+xml;
+    gzip_min_length 1024;
+
+    access_log /var/log/nginx/claude-web.access.log;
+    error_log  /var/log/nginx/claude-web.error.log;
+
+    location / {
+        proxy_pass http://claude_web;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header Connection        "";
+
+        # Claude timeout(180) < gunicorn timeout(300) < 아래(360)
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    360s;
+        proxy_read_timeout    360s;
+        proxy_request_buffering on;
+    }
+}

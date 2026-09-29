@@ -1,0 +1,79 @@
+# /etc/nginx/sites-available/claude-web   (내부망 HTTP 전용)
+#
+#   sudo cp /opt/claude-web/deploy/nginx-http.conf.example \
+#           /etc/nginx/sites-available/claude-web
+#   sudo ln -s /etc/nginx/sites-available/claude-web /etc/nginx/sites-enabled/
+#   sudo rm -f /etc/nginx/sites-enabled/default
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# server_name 을 실제 호스트명/IP 로 바꾸세요. IP 로만 접속한다면 "_" 도 됩니다.
+#
+# HTTP 로 서비스할 때는 .env 에서 SESSION_COOKIE_SECURE=0 이어야 합니다.
+# 1 로 두면 브라우저가 쿠키를 저장하지 않아 로그인이 되지 않습니다.
+
+upstream claude_web {
+    # gunicorn 은 루프백에만 bind 한다. 8080 을 방화벽에 열지 않는다.
+    server 127.0.0.1:8080 fail_timeout=0;
+    keepalive 8;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name claude.example.local;   # <-- 사내 호스트명 또는 IP
+
+    # 업로드 한도. 앱의 MAX_CONTENT_LENGTH 와 맞춰야 한다.
+    #   MAX_UPLOAD_MB(10) x MAX_IMAGES_PER_MESSAGE(5) + 1MB = 51MiB
+    # 여기가 더 작으면 nginx 가 413 을 내며 앱의 친절한 오류 메시지가 안 뜬다.
+    # .env 에서 위 두 값을 바꾸면 이 값도 같이 바꿀 것.
+    client_max_body_size 52m;
+    client_body_timeout 120s;
+
+    # 버전 노출 최소화
+    server_tokens off;
+
+    # 사내 도구라 텍스트 응답만 가볍게 압축한다.
+    gzip on;
+    gzip_types text/plain text/css application/javascript application/json
+               application/manifest+json image/svg+xml;
+    gzip_min_length 1024;
+
+    access_log /var/log/nginx/claude-web.access.log;
+    error_log  /var/log/nginx/claude-web.error.log;
+
+    location / {
+        proxy_pass http://claude_web;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header Connection        "";
+
+        # Claude 응답을 기다리는 시간.
+        # 반드시  Claude timeout < gunicorn timeout < 여기
+        #         180초         <      300초       <  360초
+        # 관리자 페이지에서 Claude timeout 을 올리면 세 값을 모두 올릴 것.
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    360s;
+        proxy_read_timeout    360s;
+
+        # 업로드는 nginx 가 다 받은 뒤 앱으로 넘긴다. (느린 클라이언트가
+        # gunicorn 스레드를 오래 잡지 않게 한다)
+        proxy_request_buffering on;
+    }
+
+    # 참고: /static/ 을 nginx 가 직접 주게 할 수도 있지만 권장하지 않는다.
+    #   - 앱이 붙이는 보안 헤더(nosniff 등)가 빠진다
+    #   - 배포 때 파일과 서비스워커 캐시 버전이 어긋날 수 있다
+    # 정 필요하면 아래를 켜되 /api/attachments/ 는 **절대** alias 하지 말 것.
+    # 첨부 이미지는 Flask 가 세션 권한을 검사한 뒤에만 내보낸다.
+    #
+    # location /static/ {
+    #     alias /opt/claude-web/static/;
+    #     expires 1h;
+    #     add_header Cache-Control "public";
+    # }
+}

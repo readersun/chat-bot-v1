@@ -1,0 +1,82 @@
+# /etc/systemd/system/claude-web.service
+#
+#   sudo cp /opt/claude-web/deploy/claude-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now claude-web
+#
+# 경로나 계정을 바꿨다면 아래 값을 함께 고치세요.
+
+[Unit]
+Description=Claude Web Portal (Flask + gunicorn)
+Documentation=file:/opt/claude-web/DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+# claude CLI 인증은 계정 단위(HOME/.claude)다. root 로 띄우면 안 된다.
+User=claudeweb
+Group=claudeweb
+
+WorkingDirectory=/opt/claude-web
+
+# 서버 고정 설정. (Claude 연결 설정은 DB + 관리자 페이지에 있다)
+EnvironmentFile=/opt/claude-web/.env
+
+# headless 인증을 CLAUDE_CODE_OAUTH_TOKEN 으로 할 때만 쓴다.
+# 앞의 "-" 는 "파일이 없어도 기동한다" 는 뜻이다.
+# 이 파일은 root 만 읽을 수 있게 두세요 (0600 root:root).
+EnvironmentFile=-/etc/claude-web/claude-auth.env
+
+# claude CLI 는 $HOME/.claude/.credentials.json 에서 인증정보를 읽는다.
+# HOME 이 없거나 다른 곳을 가리키면 서비스 계정에서 claude -p 가 인증 실패한다.
+Environment=HOME=/var/lib/claude-web/home
+# claude 를 apt 로 설치하면 /usr/bin, 네이티브 설치면 $HOME/.local/bin 에 있다.
+Environment=PATH=/opt/claude-web/venv/bin:/var/lib/claude-web/home/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# 서버에 ko_KR.UTF-8 로케일이 없어도 한글 로그가 깨지지 않게 고정한다.
+Environment=PYTHONIOENCODING=utf-8
+
+# /var/lib/claude-web 을 systemd 가 만들고 User/Group 소유로 맞춘다.
+# .env 의 DATABASE_PATH / UPLOAD_DIR 를 이 아래로 두면 된다.
+StateDirectory=claude-web
+StateDirectoryMode=0750
+
+ExecStart=/opt/claude-web/venv/bin/gunicorn \
+    --config /opt/claude-web/deploy/gunicorn.conf.py \
+    app:app
+
+ExecReload=/bin/kill -s HUP $MAINPID
+
+Restart=always
+RestartSec=5
+# Claude 호출이 진행 중일 수 있으므로 gunicorn 의 graceful_timeout 보다 넉넉히 준다.
+TimeoutStopSec=45
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-web
+
+# --- 보안 강화 -------------------------------------------------------------
+# claude CLI 가 이 중 무언가에 막히면 (예: "permission denied", 인증 실패)
+# 해당 줄을 하나씩 주석 처리해서 원인을 좁히세요.
+NoNewPrivileges=true
+PrivateTmp=true
+# /usr, /etc 등을 읽기 전용으로. 쓰기는 아래 경로에서만 가능하다.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/claude-web
+# HOME 이 /var/lib 아래이므로 /home 전체를 막아도 된다.
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
