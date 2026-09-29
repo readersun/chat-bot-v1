@@ -56,7 +56,10 @@ SETTING_DEFS = [
      "restart": False, "group": "api"},
 
     {"key": "claude_timeout", "label": "Timeout (초)", "type": "int",
-     "min": 10, "max": 3600, "restart": False},
+     "min": 10, "max": 3600, "restart": False,
+     "help": "이 값보다 gunicorn timeout 과 nginx proxy_read_timeout 이 커야 한다. "
+             "기본 배포는 180 < 300 < 360 이므로 여기를 300 이상으로 올리려면 "
+             "deploy/gunicorn.conf.py 와 nginx 설정도 함께 올릴 것"},
     {"key": "max_concurrent_claude", "label": "최대 동시 실행", "type": "int",
      "min": 1, "max": 32, "restart": False,
      "help": "서버 전체에서 동시에 실행할 Claude 요청 수. 세션 단위 lock 은 별도로 항상 동작"},

@@ -1,7 +1,22 @@
-Flask>=3.0.0
+# 운영(리눅스 서버)에 실제로 필요한 패키지만 담는다.
+#   설치: pip install -r requirements.txt
+#
+# 코드가 import 하는 서드파티 모듈은 flask / werkzeug / dotenv 뿐이다.
+# (Pillow, requests 는 쓰지 않는다. 개발 PC 에 있더라도 서버에는 필요 없다)
+
+# --- 애플리케이션 ------------------------------------------------------
+Flask>=3.0.0,<4
+# Flask 가 끌고 오지만 보안 업데이트를 직접 받기 위해 명시한다.
+# 비밀번호 해시(generate_password_hash) 와 파일 응답에 쓴다.
+Werkzeug>=3.0.0,<4
 python-dotenv>=1.0.0
 
-# 선택: 설치하면 관리자 페이지에 저장하는 Claude API Key 를 DB 에 암호화해서
-# 넣습니다. (SECRET_KEY 파생 키 / Fernet) 없으면 평문으로 저장하되 DB 파일
-# 권한을 0600 으로 제한합니다. CLI provider 만 쓴다면 필요 없습니다.
-#cryptography>=42.0.0
+# --- 운영 WSGI 서버 ----------------------------------------------------
+# 개발 서버(app.run)를 운영에 쓰지 않는다. systemd 가 이 gunicorn 을 띄운다.
+gunicorn>=21.2.0
+
+# --- 관리자 화면에 저장하는 Claude API Key 암호화 ----------------------
+# 설치하면 SECRET_KEY 파생키(Fernet)로 암호화해서 DB 에 넣는다.
+# 없어도 동작하지만 그때는 평문으로 저장되므로 운영에서는 설치를 권장한다.
+# Ubuntu x86_64/arm64 는 manylinux 휠이 있어 빌드 도구가 필요 없다.
+cryptography>=42.0.0

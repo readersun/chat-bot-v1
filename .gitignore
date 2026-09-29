@@ -30,3 +30,11 @@ desktop.ini
 # --- 기타 --------------------------------------------------------------
 cookies.txt
 *.log
+
+# --- 운영 자격증명 (실수로라도 커밋되면 안 되는 것) --------------------
+.credentials.json
+claude-auth.env
+*.pem
+*.key
+*.crt
+setup-token.txt
