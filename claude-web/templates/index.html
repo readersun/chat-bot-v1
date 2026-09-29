@@ -191,6 +191,8 @@ body.nav-open #nav { transform: translateX(0); }
   gap: 8px;
   flex: 0 0 auto;
   padding: 10px 12px;
+  /* 버튼이 숨겨지는 일반 사용자 화면에서도 두 칼럼 높이가 같아야 한다 */
+  min-height: 57px;
 }
 .pane-head h2 {
   margin: 0;
@@ -293,6 +295,9 @@ body.nav-open #nav { transform: translateX(0); }
   min-width: 0;
   min-height: 0;
   display: grid;
+  /* 암묵 열은 auto 라서 제목이 길면 열이 max-content 로 늘어나 헤더 우측
+     (앱 설치 / 아바타) 이 잘렸다. 열 너비를 컨테이너로 고정한다. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--bg);
   position: relative;
@@ -323,8 +328,15 @@ body.nav-open #nav { transform: translateX(0); }
 }
 .titles { min-width: 0; flex: 1 1 auto; }
 #chat-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   font-size: 15px;
   font-weight: 600;
+}
+/* 이름만 줄임표 처리한다. 공개범위 배지는 길이와 상관없이 항상 보여야 한다 */
+#chat-title .tname {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -443,17 +455,19 @@ body.nav-open #nav { transform: translateX(0); }
 
 #preview { display: flex; flex-wrap: wrap; gap: 6px; }
 #preview:not(:empty) { margin-bottom: 8px; }
-.chip { position: relative; }
-.chip img {
+/* 세션 필터의 .chip 과 이름이 겹쳐 썸네일이 늘어나던 문제로 .thumb 로 분리했다 */
+#preview .thumb { position: relative; flex: 0 0 auto; line-height: 0; }
+#preview .thumb img {
   width: 60px; height: 60px;
   object-fit: cover;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-.chip button {
+#preview .thumb button {
   position: absolute;
-  top: -7px; right: -7px;
+  top: -6px; right: -6px;
   width: 22px; height: 22px;
+  padding: 0;
   border: 0; border-radius: 50%;
   background: var(--danger);
   color: #fff;
@@ -552,7 +566,8 @@ body.dragging #drop-hint { display: grid; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.modal input {
+/* radio / checkbox 까지 이 규칙을 먹으면 선택지 레이아웃이 깨진다 */
+.modal input:not([type="radio"]):not([type="checkbox"]) {
   width: 100%;
   min-height: var(--tap);
   padding: 10px 12px;
@@ -560,7 +575,10 @@ body.dragging #drop-hint { display: grid; }
   border-radius: var(--radius-sm);
   background: var(--bg);
 }
-.modal input:focus { outline: none; border-color: var(--accent); }
+.modal input:not([type="radio"]):not([type="checkbox"]):focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .modal .actions .btn { min-height: var(--tap); padding: 0 16px; }
 
@@ -665,7 +683,7 @@ body.dragging #drop-hint { display: grid; }
 
 .chips { display: flex; gap: 6px; }
 
-.chip {
+.chips .chip {
   flex: 1;
   min-height: 32px;
   padding: 0 6px;
@@ -678,7 +696,7 @@ body.dragging #drop-hint { display: grid; }
   white-space: nowrap;
 }
 
-.chip.active {
+.chips .chip.active {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--text);
@@ -773,6 +791,7 @@ body.dragging #drop-hint { display: grid; }
 /* 채팅 헤더 공개범위 배지 */
 .vis-badge {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 4px;
   padding: 1px 7px;
@@ -790,12 +809,15 @@ body.dragging #drop-hint { display: grid; }
 /* 모달 선택지 */
 .modal .choices { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 2px; }
 
+/* [라디오][제목] / [      ][설명] 2단 그리드. 설명이 길어도 줄바꿈만 된다 */
 .modal .choices label {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
+  row-gap: 2px;
   min-height: var(--tap);
-  padding: 0 10px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--panel2);
@@ -804,8 +826,29 @@ body.dragging #drop-hint { display: grid; }
 }
 
 .modal .choices label.on { border-color: var(--accent); background: var(--accent-soft); }
-.modal .choices input { margin: 0; flex: none; }
-.modal .choices .cdesc { color: var(--muted); font-size: 12px; }
+
+.modal .choices input {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  justify-self: center;
+  align-self: center;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.modal .choices label > span { grid-column: 2; }
+
+.modal .choices .cdesc {
+  grid-column: 2;
+  grid-row: 2;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
 </style>
 </head>
 
@@ -1464,7 +1507,7 @@ body.dragging #drop-hint { display: grid; }
   function setScope(scope) {
     state.scope = scope;
     localStorage.setItem("session_scope", scope);
-    var chips = document.querySelectorAll(".chip");
+    var chips = document.querySelectorAll(".chips .chip");
     for (var i = 0; i < chips.length; i++) {
       chips[i].classList.toggle("active", chips[i].dataset.scope === scope);
     }
@@ -1553,7 +1596,12 @@ body.dragging #drop-hint { display: grid; }
       || state.session;
 
     var title = $("chat-title");
-    title.textContent = s ? s.name : "Claude Web";
+    title.textContent = "";
+    var tname = document.createElement("span");
+    tname.className = "tname";
+    tname.textContent = s ? s.name : "Claude Web";
+    tname.title = s ? s.name : "";
+    title.appendChild(tname);
     if (s) {
       var b = document.createElement("span");
       b.className = "vis-badge";
@@ -1652,12 +1700,20 @@ body.dragging #drop-hint { display: grid; }
       .then(function (data) {
         if (listEl.contains(pending)) { listEl.removeChild(pending); }
         if (listEl.contains(stub)) { listEl.removeChild(stub); }
-        if (data.messages) {
-          data.messages.forEach(addMessage);
-        } else {
+
+        if (!data.messages) {
+          /* 실패. 여기서 loadSessions 를 부르면 목록을 다시 그리면서
+             방금 붙인 오류 말풍선까지 지워져 아무 안내도 남지 않는다.
+             입력 내용도 돌려주어 다시 보낼 수 있게 한다. */
           addMessage({ role: "user", content: text, attachments: [] });
           addMessage({ role: "error", content: data.error || "알 수 없는 오류", attachments: [] });
+          toast(data.error || "전송하지 못했습니다.");
+          if (!inputEl.value) { inputEl.value = text; autoGrow(); }
+          scrollToBottom();
+          return null;
         }
+
+        data.messages.forEach(addMessage);
         if (data.elapsed) {
           var m = document.createElement("div");
           m.className = "meta";
@@ -1695,7 +1751,7 @@ body.dragging #drop-hint { display: grid; }
     previewEl.textContent = "";
     state.files.forEach(function (f, idx) {
       var chip = document.createElement("div");
-      chip.className = "chip";
+      chip.className = "thumb";
       var img = document.createElement("img");
       img.src = URL.createObjectURL(f);
       img.title = f.name;
@@ -1853,7 +1909,7 @@ body.dragging #drop-hint { display: grid; }
 
   /* ------------------------------------------------------- 필터 / 검색 */
   function initFilters() {
-    var chips = document.querySelectorAll(".chip");
+    var chips = document.querySelectorAll(".chips .chip");
     for (var i = 0; i < chips.length; i++) {
       chips[i].classList.toggle("active", chips[i].dataset.scope === state.scope);
       chips[i].onclick = function () { setScope(this.dataset.scope); };
