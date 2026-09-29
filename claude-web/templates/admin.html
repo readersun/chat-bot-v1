@@ -27,6 +27,8 @@
 </nav>
 
 <main class="page" id="page" data-tab="{{ tab }}">
+  <!-- 알림은 content 밖에 둔다. render() 가 content 를 비우기 때문이다. -->
+  <div id="alerts" role="status" aria-live="polite"></div>
   <div id="content"></div>
 </main>
 
@@ -36,6 +38,7 @@
 
   var TAB = document.getElementById("page").dataset.tab;
   var content = document.getElementById("content");
+  var alerts = document.getElementById("alerts");
   var csrf = null;
 
   /* ----------------------------------------------------------- DOM 헬퍼 */
@@ -58,9 +61,64 @@
 
   function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
 
+  /* --------------------------------------------------------------- 모달
+     브라우저 기본 prompt/confirm 은 화면 스타일이 따로 놀고, 새 비밀번호가
+     평문으로 그대로 보이며, "추가 대화상자 차단" 이 켜지면 아예 동작하지
+     않는다. 채팅 화면과 같은 모양의 자체 모달을 쓴다. */
+  function modal(opts) {
+    return new Promise(function (resolve) {
+      var inp = null;
+      var ov = el("div", { class: "overlay" });
+      var box = el("div", { class: "modal", role: "dialog", "aria-modal": "true" });
+
+      box.appendChild(el("h3", { text: opts.title }));
+      if (opts.message) { box.appendChild(el("p", { text: opts.message })); }
+      if (opts.input) {
+        inp = el("input", {
+          type: opts.inputType || "text",
+          value: opts.value || "",
+          placeholder: opts.placeholder || "",
+          autocomplete: opts.inputType === "password" ? "new-password" : "off"
+        });
+        box.appendChild(inp);
+      }
+
+      var cancel = el("button", { class: "btn", type: "button", text: "취소" });
+      var ok = el("button", {
+        class: "btn " + (opts.danger ? "danger" : "primary"),
+        type: "button",
+        text: opts.confirmText || "확인"
+      });
+      box.appendChild(el("div", { class: "actions" }, [cancel, ok]));
+
+      function done(v) {
+        document.removeEventListener("keydown", onKey);
+        if (ov.parentNode) { ov.parentNode.removeChild(ov); }
+        resolve(v);
+      }
+      function onKey(e) {
+        if (e.key === "Escape") { done(null); }
+        else if (e.key === "Enter" && inp) { e.preventDefault(); ok.onclick(); }
+      }
+      cancel.onclick = function () { done(null); };
+      ok.onclick = function () {
+        if (!opts.input) { done(true); return; }
+        var v = inp.value.trim();
+        done(v === "" ? null : v);
+      };
+      ov.onclick = function (e) { if (e.target === ov) { done(null); } };
+
+      document.addEventListener("keydown", onKey);
+      ov.appendChild(box);
+      document.body.appendChild(ov);
+      if (inp) { inp.focus(); inp.select(); } else { ok.focus(); }
+    });
+  }
+
   function notify(msg, kind) {
+    /* content 가 아니라 별도 영역에 넣어야 바로 뒤따르는 render() 에 지워지지 않는다 */
     var box = el("div", { class: "alert " + (kind || "ok"), role: "alert", text: msg });
-    content.insertBefore(box, content.firstChild);
+    alerts.appendChild(box);
     window.scrollTo(0, 0);
     setTimeout(function () { if (box.parentNode) { box.parentNode.removeChild(box); } }, 6000);
   }
@@ -306,7 +364,11 @@
     function patch(body, msg) {
       api("PATCH", "/api/admin/users/" + u.id, body)
         .then(function () { notify(msg); render(); })
-        .catch(function (e) { notify(e.message, "error"); });
+        .catch(function (e) {
+          /* 실패했는데 다시 그리지 않으면 select 가 거절된 값을 그대로 보여준다 */
+          notify(e.message, "error");
+          render();
+        });
     }
 
     var roleSel = el("select", { class: "btn sm", onchange: function () {
@@ -323,24 +385,36 @@
       } }, [u.is_active ? "비활성화" : "활성화"]);
 
     var rename = el("button", { class: "btn sm", onclick: function () {
-      var v = window.prompt("표시 이름", u.display_name);
-      if (v !== null) { patch({ display_name: v }, "표시 이름을 변경했습니다."); }
+      modal({ title: "표시 이름 변경", input: true, value: u.display_name,
+              placeholder: "표시 이름" }).then(function (v) {
+        if (v === null) { return; }
+        patch({ display_name: v }, "표시 이름을 변경했습니다.");
+      });
     } }, ["이름"]);
 
     var pw = el("button", { class: "btn sm", onclick: function () {
-      var v = window.prompt("새 비밀번호 (8자 이상)");
-      if (!v) { return; }
-      api("POST", "/api/admin/users/" + u.id + "/password", { password: v })
-        .then(function () { notify("비밀번호를 초기화했습니다."); })
-        .catch(function (e) { notify(e.message, "error"); });
+      modal({ title: "비밀번호 초기화",
+              message: "'" + u.username + "' 계정의 새 비밀번호를 입력하세요.",
+              input: true, inputType: "password",
+              placeholder: "새 비밀번호 (8자 이상)",
+              confirmText: "초기화" }).then(function (v) {
+        if (!v) { return; }
+        api("POST", "/api/admin/users/" + u.id + "/password", { password: v })
+          .then(function () { notify("비밀번호를 초기화했습니다."); })
+          .catch(function (e) { notify(e.message, "error"); });
+      });
     } }, ["비밀번호"]);
 
     var del = el("button", { class: "btn sm danger", onclick: function () {
-      if (!window.confirm("'" + u.username + "' 계정을 삭제합니다.\n" +
-                          "이 사용자가 만든 세션과 메시지는 남고 작성자 표시만 사라집니다.")) { return; }
-      api("DELETE", "/api/admin/users/" + u.id)
-        .then(function () { notify("삭제했습니다."); render(); })
-        .catch(function (e) { notify(e.message, "error"); });
+      modal({ title: "사용자 삭제",
+              message: "'" + u.username + "' 계정을 삭제합니다.\n" +
+                       "이 사용자가 만든 세션과 메시지는 남고 작성자 표시만 사라집니다.",
+              confirmText: "삭제", danger: true }).then(function (yes) {
+        if (!yes) { return; }
+        api("DELETE", "/api/admin/users/" + u.id)
+          .then(function () { notify("삭제했습니다."); render(); })
+          .catch(function (e) { notify(e.message, "error"); });
+      });
     } }, ["삭제"]);
 
     return el("tr", {}, [
@@ -395,10 +469,14 @@
         if (s.type === "secret" && s.has_value) {
           kids.push(el("button", { class: "btn sm", style: "margin-top:8px;",
             onclick: function () {
-              if (!window.confirm("저장된 값을 지웁니다.")) { return; }
-              api("POST", "/api/admin/settings/" + s.key + "/clear", {})
-                .then(function () { notify("삭제했습니다."); render(); })
-                .catch(function (e) { notify(e.message, "error"); });
+              modal({ title: "저장된 값 삭제",
+                      message: "'" + s.label + "' 에 저장된 값을 지웁니다.",
+                      confirmText: "삭제", danger: true }).then(function (yes) {
+                if (!yes) { return; }
+                api("POST", "/api/admin/settings/" + s.key + "/clear", {})
+                  .then(function () { notify("삭제했습니다."); render(); })
+                  .catch(function (e) { notify(e.message, "error"); });
+              });
             } }, ["저장된 값 삭제"]));
         }
         return el("div", { class: "field", "data-group": s.group || "" }, kids);
