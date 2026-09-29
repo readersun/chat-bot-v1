@@ -374,7 +374,9 @@ def before():
 @app.after_request
 def after(resp):
     # 인증된 화면/API 응답이 중간 캐시나 서비스워커에 남지 않게 한다.
-    if request.path.startswith(("/api/", "/admin")) or request.path in ("/login", "/setup"):
+    # 앱 셸("/") 에도 로그인한 사용자 이름과 CSRF 토큰이 들어가므로 포함해야 한다.
+    # 로그인과 무관한 정적 리소스와 PWA 파일만 캐시를 허용한다.
+    if not request.path.startswith(("/static/", "/manifest.webmanifest", "/sw.js")):
         resp.headers.setdefault("Cache-Control", "no-store, no-cache, must-revalidate")
         resp.headers.setdefault("Pragma", "no-cache")
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
