@@ -728,6 +728,42 @@ body.dragging #drop-hint { display: grid; }
 }
 
 /* 사용자 메뉴 */
+/* 헤더의 메모 버튼.
+   예전에는 아바타 메뉴 안에만 있어서 찾기 어려웠다. 채팅과 메모는 동등한
+   주요 기능이므로 헤더에 항상 보이게 둔다. */
+.head-link {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.head-link:hover { border-color: var(--accent); color: var(--accent); }
+.head-link svg {
+  width: 16px; height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+/* 좁은 화면에서는 글자를 접고 아이콘만 남긴다. 제목이 밀리지 않게 한다. */
+@media (max-width: 560px) {
+  .head-link { width: 34px; padding: 0; }
+  .head-link span { display: none; }
+}
+
 .usermenu { position: relative; flex: none; }
 
 #user-btn {
@@ -898,6 +934,10 @@ body.dragging #drop-hint { display: grid; }
         <div id="chat-title">Claude Web</div>
         <div id="chat-sub"></div>
       </div>
+      <a class="head-link" href="/notes" title="메모">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
+        <span>메모</span>
+      </a>
       <button class="btn" id="install-btn" hidden>앱 설치</button>
       <div class="usermenu">
         <button class="icon-btn" id="user-btn" aria-haspopup="true" aria-expanded="false"
@@ -909,7 +949,6 @@ body.dragging #drop-hint { display: grid; }
           </div>
           <button type="button" id="menu-mine" role="menuitem">내 세션만 보기</button>
           <button type="button" id="menu-password" role="menuitem">비밀번호 변경</button>
-          <a href="/notes" role="menuitem">메모</a>
           <a id="menu-admin" href="/admin" role="menuitem" hidden>관리자</a>
           <a href="/logout" role="menuitem">로그아웃</a>
         </div>
