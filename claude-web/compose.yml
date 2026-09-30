@@ -49,6 +49,9 @@ services:
     user: root
     command: ["true"]
     volumes:
+      # app 과 같은 마운트를 쓴다. 소스는 필요 없지만, 붙여두면 entrypoint 의
+      # 점검이 app 과 같은 조건에서 돌아 로그에 헛경고가 남지 않는다.
+      - ./:/app:ro,z
       - ${HOST_DATA_DIR:-/var/lib/claude-web}:/var/lib/claude-web:z
       - claude-home:/home/claudeweb
     restart: "no"

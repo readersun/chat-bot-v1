@@ -208,6 +208,16 @@ python3 -c "import secrets;print(secrets.token_hex(32))"   # SECRET_KEY 생성
 vi .env
 ```
 
+`.env` 는 `root:root 0600` 으로 두면 된다. 컨테이너는 이 파일을 직접 읽지 않는다.
+compose 의 `env_file` 이 값을 읽어서(host 의 root 권한으로) 컨테이너 환경변수로
+넣어주기 때문이다. 앱도 `.env` 를 못 읽으면 환경변수만 쓰고 한 줄 남기고 넘어간다.
+
+컨테이너가 파일도 직접 읽게 하고 싶다면 실행 사용자(uid 1000)가 읽을 수 있어야 한다.
+
+```bash
+chown root:1000 .env && chmod 640 .env     # root 만 수정, 컨테이너는 읽기만
+```
+
 운영에서 반드시 확인/수정할 값:
 
 ```ini
@@ -1061,6 +1071,23 @@ docker compose exec app claude -p "Respond only with OK"
 인증정보가 root 소유로 만들어지는 사고는 `docker exec -u root` 로 `claude` 를
 실행했을 때 일어난다. 항상 기본 사용자(`claudeweb`)로 실행한다.
 
+### app 컨테이너가 `Restarting (3)` 으로 계속 재시작한다
+
+gunicorn 이 종료 코드 3 으로 죽는 것은 **앱 모듈 import 실패**다. 로그에 파이썬
+traceback 이 그대로 남는다.
+
+```bash
+docker compose logs app --tail=60
+```
+
+| traceback 마지막 줄 | 원인 | 조치 |
+|---|---|---|
+| `PermissionError: ... '/app/.env'` | `.env` 가 root 전용(0600)이라 uid 1000 이 못 읽음 | 최신 소스는 이 경우 환경변수만 쓰고 계속 기동한다. 구버전이면 `git pull` 하거나 `chown root:1000 .env && chmod 640 .env` |
+| `PermissionError: ... '/var/lib/claude-web...'` | 데이터 디렉터리 소유자 불일치 | `docker compose up -d` (init 이 chown 한다) |
+| `ModuleNotFoundError` | `requirements.txt` 변경 후 재빌드 안 함 | `docker compose build app && docker compose up -d app` |
+| `FileNotFoundError: /app/app.py` | 소스 마운트 누락 | `compose.yml` 의 `./:/app:ro,z` 확인, 실행 디렉터리 확인 |
+| `sqlite3.DatabaseError` | DB 손상 | [16. 복구](#16-백업과-복구) |
+
 ### DB 오류
 
 ```bash
@@ -1168,6 +1195,13 @@ setsebool -P httpd_can_network_connect 1        # Rocky/RHEL 에서 필수
 | SELinux `:z` 라벨 동작 | SELinux 가 없는 환경이라 무시되었다. Rocky 에서 `ls -Zd` 로 확인할 것 |
 | firewalld 규칙 | 같은 이유 |
 | host bind mount 권한 (`/var/lib/claude-web`) | Windows 에서는 chown 의미가 달라 named volume 으로 시험했다. 리눅스에서 `ls -ld` 로 확인할 것 |
+
+> **이 항목에서 실제로 문제가 나왔고 고쳤다.** Rocky 9 운영 서버에서
+> `.env` 가 `root:root 0600` 이라 uid 1000 인 컨테이너가 읽지 못해
+> `PermissionError: '/app/.env'` 로 앱이 기동하지 못했다. Windows 볼륨은 파일
+> 권한을 무시하므로 개발 PC 테스트에서는 드러나지 않았다.
+> `config.py` 가 이 경우 환경변수만 쓰고 계속 기동하도록 고쳤다. (compose 의
+> `env_file` 이 이미 같은 값을 넣어준다)
 | 실제 재부팅 | 정책 설정과 프로세스 종료 시 자동 복구까지만 확인했다 |
 | 사내 DNS / 다른 PC 에서의 접속 | 사내망이 필요하다 |
 | 사내 CA HTTPS | 인증서가 필요하다 |

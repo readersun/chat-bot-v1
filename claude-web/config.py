@@ -15,15 +15,46 @@ config
 """
 
 import os
+import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+DOTENV_PATH = os.path.join(BASE_DIR, ".env")
+
 try:
     from dotenv import load_dotenv
-
-    load_dotenv(os.path.join(BASE_DIR, ".env"))
 except ImportError:  # pragma: no cover
     pass
+else:
+    try:
+        load_dotenv(DOTENV_PATH)
+    except OSError as _exc:
+        # 파일이 있는데 읽을 수 없는 경우(권한 등)에도 기동은 계속한다.
+        #
+        # Docker 배포에서는 compose 의 env_file 이 같은 값을 이미 환경변수로
+        # 넣어주므로 이 파일을 못 읽어도 정상 동작한다. 컨테이너는 비특권
+        # 사용자로 돌기 때문에 host 의 .env 가 root 전용(0600)이면 여기서
+        # PermissionError 가 나서 예전에는 앱이 아예 기동하지 못했다.
+        #
+        # 다만 조용히 넘기면 SECRET_KEY 가 매번 임시값이 되는(=재시작마다 전원
+        # 로그아웃) 사고를 눈치채지 못하므로, 경고는 반드시 남긴다.
+        # 로거가 아직 없는 시점이라 stderr 로 쓴다. (systemd journal /
+        # docker compose logs 에 그대로 보인다)
+        # SECRET_KEY 가 이미 환경에 있으면 설정이 다른 경로로 들어온 것이다.
+        # (Docker 배포의 정상 경로) 그때는 한 줄만 남겨 로그를 어지럽히지 않는다.
+        if os.getenv("SECRET_KEY"):
+            print("[config] %s 를 읽지 않았습니다 (%s). 환경변수 값을 사용합니다."
+                  % (DOTENV_PATH, _exc), file=sys.stderr)
+        else:
+            for _line in (
+                    "[config] 경고: %s 를 읽지 못했고 환경변수에도 설정이 없습니다 (%s)."
+                    % (DOTENV_PATH, _exc),
+                    "[config]        SECRET_KEY 가 임시값이 되어 재시작마다 전원 "
+                    "로그아웃되고, DB/업로드 경로도 기본값으로 떨어집니다.",
+                    "[config]        파일 권한을 확인하세요. 컨테이너 배포라면 "
+                    "compose 의 env_file 설정을 확인하세요.",
+            ):
+                print(_line, file=sys.stderr)
 
 
 def env_int(name, default):
