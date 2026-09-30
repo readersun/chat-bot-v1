@@ -1,0 +1,21 @@
+# 개발용 override. **운영에서는 쓰지 않는다.**
+#
+#     docker compose -f compose.yml -f compose.dev.yml up -d
+#
+# 운영과 다른 점
+#   - gunicorn --reload : 소스가 바뀌면 워커를 자동 재시작한다.
+#     (Flask debug server 도, werkzeug 디버거도 켜지 않는다. 운영 코드와 같은
+#      gunicorn 으로 돌면서 reload 만 붙는다)
+#   - app 포트를 host 에 직접 노출해서 nginx 없이도 접속할 수 있다.
+#   - nginx 는 그대로 쓴다. 프록시 경유 동작까지 개발에서 확인하려면 80 으로 접속.
+services:
+  app:
+    command:
+      - gunicorn
+      - --config
+      - /app/deploy/gunicorn.conf.py
+      - --reload
+      - app:app
+    ports:
+      - "${DEV_APP_PORT:-8081}:8080"
+    restart: "no"

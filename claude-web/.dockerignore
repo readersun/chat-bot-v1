@@ -1,0 +1,53 @@
+# build context 는 claude-web/ 이고, 이미지에 COPY 하는 것은
+#   requirements.txt
+#   docker/entrypoint.sh
+# 두 개뿐이다. 나머지는 context 전송 시간만 잡아먹으므로 제외한다.
+#
+# 주의: requirements.txt 는 절대 제외하면 안 된다. 이미지 빌드에 필요하다.
+
+# --- 절대 이미지 쪽으로 넘어가면 안 되는 것 ----------------------------
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-wal
+*.db-shm
+setup-token.txt
+*.pem
+*.key
+*.crt
+.credentials.json
+
+# --- 런타임/개발 산출물 ------------------------------------------------
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+node_modules/
+*.log
+
+# --- 이미지 빌드에 필요 없는 소스 (소스는 bind mount 로 들어간다) ------
+app.py
+admin.py
+auth.py
+config.py
+db.py
+permissions.py
+providers.py
+settings_store.py
+templates/
+static/
+deploy/
+scripts/
+*.md
+
+# --- 에디터 / OS -------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store

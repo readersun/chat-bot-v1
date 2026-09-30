@@ -32,15 +32,26 @@ claude-web/
 ├── admin.py             관리자 페이지 + 관리 API
 ├── requirements.txt
 ├── .env.example
-├── DEPLOYMENT.md        운영 배포 가이드 (새 리눅스 서버 0부터)
+├── DEPLOYMENT.md        운영 배포 가이드 - OS 에 직접 설치
+├── DEPLOYMENT_DOCKER.md 운영 배포 가이드 - Docker
+├── compose.yml          운영 Docker Compose (nginx + app)
+├── compose.dev.yml      개발용 override (gunicorn --reload)
+├── .dockerignore
+├── docker/
+│   ├── Dockerfile               실행환경 이미지 (소스는 넣지 않는다)
+│   ├── entrypoint.sh            데이터 권한 정리 + 권한 강하
+│   ├── nginx.conf               컨테이너 nginx (HTTP)
+│   └── nginx-https.conf.example 컨테이너 nginx (사내 인증서 HTTPS)
 ├── deploy/
-│   ├── claude-web.service       systemd 유닛
+│   ├── claude-web.service       systemd 유닛 (비-Docker 배포)
 │   ├── gunicorn.conf.py         운영 WSGI 설정 (워커 1개인 이유 포함)
-│   ├── nginx-http.conf.example  내부망 HTTP
-│   └── nginx-https.conf.example 사내 인증서 HTTPS
+│   ├── nginx-http.conf.example  host nginx - 내부망 HTTP
+│   └── nginx-https.conf.example host nginx - 사내 인증서 HTTPS
 ├── scripts/
-│   ├── install.sh       반복 작업 자동화 (Ubuntu)
-│   └── backup.sh        DB online backup + uploads
+│   ├── install.sh       반복 작업 자동화 (Ubuntu, 비-Docker)
+│   ├── backup.sh        DB online backup + uploads (비-Docker)
+│   ├── docker-backup.sh Docker 배포용 백업
+│   └── docker-update.sh Docker 배포용 업데이트
 ├── templates/
 │   ├── index.html       채팅 화면 (반응형 + PWA)
 │   ├── login.html       로그인
@@ -306,8 +317,33 @@ sudo -u claude -H /opt/claude-web/venv/bin/python /opt/claude-web/app.py create-
 
 ## 설치 / 실행
 
-운영 서버 배포는 **[DEPLOYMENT.md](DEPLOYMENT.md)** 에 전부 정리되어 있다.
-아무것도 설치되지 않은 Ubuntu 서버 한 대에 0부터 올리는 절차다.
+운영 배포 방법은 두 가지다. 둘 다 같은 소스, 같은 DB 스키마, 같은 데이터 경로를
+쓰므로 서로 오갈 수 있다.
+
+### A. Docker - **[DEPLOYMENT_DOCKER.md](DEPLOYMENT_DOCKER.md)**
+
+OS 에는 Docker 와 git 만 설치하고, Python / gunicorn / Claude CLI 는 이미지에 둔다.
+웹 소스는 이미지에 넣지 않고 host 의 git 작업 트리를 `/app` 으로 bind mount 한다.
+
+```bash
+cd /opt/claude-web/claude-web
+cp .env.example .env && chmod 600 .env    # SECRET_KEY 기입
+docker compose build
+docker compose up -d
+docker compose exec app claude            # Claude 최초 로그인
+docker compose exec app python app.py create-admin
+```
+
+평소 운영:
+
+```bash
+git pull && docker compose restart app          # 소스만 변경
+docker compose build app && docker compose up -d app   # requirements 변경
+```
+
+### B. OS 에 직접 설치 - **[DEPLOYMENT.md](DEPLOYMENT.md)**
+
+아무것도 설치되지 않은 서버 한 대에 0부터 올리는 절차다.
 (OS 패키지 -> 계정 -> 소스 -> venv -> Claude CLI -> 인증 -> .env -> DB -> gunicorn
 -> systemd -> nginx -> 관리자 설정 -> 테스트 -> 재부팅 -> 업데이트 -> 백업 -> 장애 대응)
 
@@ -366,6 +402,9 @@ journalctl -u claude-web -f
 
 `HOME` 과 `PATH` 를 unit 에 명시해야 한다. systemd 는 로그인 셸의 환경을
 물려받지 않아서, 이게 빠지면 셸에서는 되는데 웹에서만 Claude 호출이 실패한다.
+
+Docker 배포에서는 이 unit 을 쓰지 않는다. `systemctl enable --now docker` 와
+compose 의 `restart: unless-stopped` 로 재부팅 후 자동 복구가 된다.
 
 ## 환경변수 (.env)
 

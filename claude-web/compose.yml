@@ -1,0 +1,175 @@
+# claude-web 운영 Docker Compose
+# ==============================
+#
+# 이 파일이 있는 디렉터리(= git 작업 트리의 claude-web/)가 compose 프로젝트
+# 디렉터리다. 운영 서버에서는 보통 다음이 된다.
+#
+#     /opt/claude-web/                 <- git clone 위치 (repo 루트)
+#     /opt/claude-web/claude-web/      <- 여기서 docker compose 명령을 실행한다
+#
+# lifecycle 을 세 갈래로 완전히 분리한다.
+#
+#     소스        host 의 git 작업 트리    ./                    -> /app (읽기 전용)
+#     데이터      host 디렉터리            /var/lib/claude-web   -> 같은 경로
+#     Claude 인증 named volume             claude-web-home       -> /home/claudeweb
+#
+# 자주 쓰는 명령
+#     docker compose up -d                              기동
+#     docker compose ps                                 상태
+#     docker compose logs -f app                        앱/gunicorn 로그
+#     git pull && docker compose restart app            소스 변경 반영
+#     docker compose build app && docker compose up -d app
+#                                                       requirements.txt 변경 반영
+#     docker compose exec app claude                    Claude 최초 로그인
+#
+# 개발 PC 에서 잠깐 띄워볼 때만:
+#     docker compose -f compose.yml -f compose.dev.yml up -d
+
+name: claude-web
+
+services:
+  # =========================================================================
+  # init : 1회성. 데이터 디렉터리 생성과 소유권 정리만 하고 종료한다.
+  #
+  # 이것을 분리한 이유는 app 을 root 로 띄우지 않기 위해서다.
+  # `docker compose exec` 는 entrypoint 를 거치지 않고 컨테이너에 설정된
+  # 사용자로 실행되므로, app 이 root 면 `exec app claude` 가 root 소유의
+  # 인증 파일을 만들어 웹이 Claude 인증을 못 읽게 된다.
+  # => app 은 처음부터 claudeweb, 권한 정리는 여기서.
+  # =========================================================================
+  init:
+    image: ${CLAUDE_WEB_IMAGE:-claude-web-runtime:1.0.0}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+        CLAUDE_CODE_CHANNEL: ${CLAUDE_CODE_CHANNEL:-stable}
+    user: root
+    command: ["true"]
+    volumes:
+      - ${HOST_DATA_DIR:-/var/lib/claude-web}:/var/lib/claude-web:z
+      - claude-home:/home/claudeweb
+    restart: "no"
+
+  # =========================================================================
+  # app : gunicorn + Flask + Claude Code CLI
+  # =========================================================================
+  app:
+    # 이미지 태그를 .env 의 CLAUDE_WEB_IMAGE 한 곳에서 바꾼다.
+    # 소스(git commit)와 실행환경(이미지 태그)의 버전은 서로 독립이다.
+    image: ${CLAUDE_WEB_IMAGE:-claude-web-runtime:1.0.0}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+        CLAUDE_CODE_CHANNEL: ${CLAUDE_CODE_CHANNEL:-stable}
+
+    # root 로 돌지 않는다. gunicorn / Claude CLI / 업로드 모두 이 사용자다.
+    user: claudeweb
+
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+    # 애플리케이션 설정. 이미지에 굽지 않는다.
+    # (app 자신도 python-dotenv 로 /app/.env 를 읽지만, gunicorn 설정처럼
+    #  파이썬 코드보다 먼저 필요한 값이 있어 compose 에서도 넣어준다)
+    env_file:
+      - .env
+    environment:
+      # 컨테이너 안에서는 루프백이 아니라 compose 네트워크로 들어야 nginx 가 붙는다.
+      # host 에는 이 포트를 publish 하지 않으므로 외부로 열리지는 않는다.
+      GUNICORN_BIND: 0.0.0.0:8080
+      # Claude 인증정보(~/.claude)가 들어갈 곳. named volume 으로 보존된다.
+      HOME: /home/claudeweb
+
+    volumes:
+      # 1) 소스 : host 의 git 작업 트리. git pull 하면 컨테이너에 즉시 보인다.
+      #    읽기 전용이다. 앱은 /app 에 쓸 일이 없고(.pyc 도 만들지 않는다),
+      #    Claude 가 소스를 고치는 사고도 막는다.
+      #    :z = SELinux 라벨. Rocky/RHEL 에서 필요하고, 그 외에서는 무시된다.
+      - ./:/app:ro,z
+
+      # 2) 데이터 : DB / 업로드 / Claude working dir / 백업.
+      #    컨테이너를 지워도 남아야 하는 것. 컨테이너 안 경로는 고정이고
+      #    host 경로만 .env 의 HOST_DATA_DIR 로 바꿀 수 있다.
+      - ${HOST_DATA_DIR:-/var/lib/claude-web}:/var/lib/claude-web:z
+
+      # 3) Claude 인증 : ~/.claude/.credentials.json (0600) 과 ~/.claude.json.
+      #    HOME 전체를 볼륨으로 둔다. Claude 가 HOME 아래 어디에 무엇을 쓰든
+      #    down/up 이나 이미지 교체 후에도 로그인 상태가 유지된다.
+      - claude-home:/home/claudeweb
+
+    expose:
+      - "8080"
+
+    restart: unless-stopped
+    # PID 1 을 docker-init 으로 두어 claude 서브프로세스의 좀비를 거둔다.
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      # /health 는 로그인 없이 200 을 주는 라우트다. (app.py)
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    # gunicorn graceful_timeout(30초)보다 넉넉하게. 진행 중인 Claude 응답을
+    # 가능한 한 끝내고 내려간다.
+    stop_grace_period: 45s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # =========================================================================
+  # nginx : 유일한 외부 노출 지점
+  # =========================================================================
+  nginx:
+    image: ${NGINX_IMAGE:-nginx:1.29-alpine}
+    depends_on:
+      # healthy 까지 기다리지 않는다. 앱이 안 뜰 때 502 라도 봐야 원인을 찾는다.
+      app:
+        condition: service_started
+
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      # 사내 HTTPS 를 쓸 때 주석을 푼다. docker/nginx-https.conf.example 참고
+      # - "443:443"
+
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro,z
+      # 사내 인증서를 쓸 때만. 인증서는 git/이미지에 넣지 않는다.
+      # - ${CERT_DIR:-/etc/claude-web/certs}:/etc/nginx/certs:ro,z
+
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  # Claude 인증/설정. `docker compose down` 으로는 지워지지 않는다.
+  # (지워지는 것은 `docker compose down -v` 뿐이다 - 운영에서 쓰지 말 것)
+  claude-home:
+    name: claude-web-home
