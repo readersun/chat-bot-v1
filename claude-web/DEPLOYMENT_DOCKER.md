@@ -235,6 +235,27 @@ CLAUDE_TIMEOUT=180
 MAX_CONCURRENT_CLAUDE=3
 ```
 
+### host 의 80 을 이미 다른 웹서버가 쓰고 있다면
+
+`HTTP_PORT` 만 바꾼다. `docker/nginx.conf` 는 고치지 않는다. 컨테이너 **내부** nginx 는
+계속 80 을 듣고, host 쪽 publish 포트만 바뀐다.
+
+```ini
+HTTP_PORT=19780
+```
+
+```bash
+firewall-cmd --permanent --add-port=19780/tcp    # --add-service=http 대신
+firewall-cmd --reload
+```
+
+접속 주소는 `http://<호스트명>:19780/` 이 되고, 확인 명령에도 포트를 붙인다.
+비표준 포트에서도 `/admin` 같은 절대 리다이렉트가 깨지지 않도록 nginx 가 `Host` 를
+`$http_host`(포트 포함)로 넘긴다. 32768 이상은 ephemeral 포트 범위와 겹치므로 피한다.
+
+기존 웹서버를 그대로 앞단으로 쓰는 쪽이 낫다면
+[21. Option 비교](#21-nginx-를-컨테이너로-vs-host-에) 의 Option B 로 간다.
+
 ### 설정이 두 곳에 나뉘어 있다 (이 구조를 유지한다)
 
 | 어디 | 무엇 | 반영 시점 |
@@ -588,7 +609,20 @@ reply         OK
 | 10 | 이미지 업로드 (png/jpg/webp/gif) | |
 | 11 | 업로드한 이미지에 대해 질문 → Claude 가 내용을 읽는지 | |
 | 12 | 새로고침 후 대화 유지 | |
-| 13 | 모바일 브라우저 / 홈 화면에 추가 (PWA) | |
+| 13 | 모바일 브라우저에서 접속 / 화면 동작 | |
+
+> **평문 HTTP 로 서비스하면 PWA(서비스워커 / 홈 화면에 추가)는 동작하지 않는다.**
+> 브라우저는 서비스워커를 `https:` 또는 `localhost` 에서만 등록한다.
+> `http://<호스트명>/` 이나 `http://<호스트명>:19780/` 은 secure context 가 아니다.
+>
+> - 서비스워커 등록이 실패한다 -> 오프라인 캐시 없음
+> - 설치 버튼이 나타나지 않는다 (`beforeinstallprompt` 가 발생하지 않음)
+> - 앱은 `register("/sw.js").catch(...)` 로 실패를 무시하므로 **오류 없이 나머지 기능은 전부 정상**이다.
+>   모바일 브라우저로 접속해서 쓰는 것도 된다.
+>
+> 설치형 앱처럼 쓰려면 사내 CA 인증서로 HTTPS 로 올린다. (→ [13. 내부 HTTPS](#13-내부-https-선택))
+> `/static/`, `/manifest.webmanifest`, `/sw.js` 자체는 HTTP 에서도 200 으로 내려온다.
+> (서비스워커 *등록*만 브라우저가 거부한다)
 
 서버에서 한 번에 훑는 명령:
 
