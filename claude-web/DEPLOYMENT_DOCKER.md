@@ -6,6 +6,11 @@ Python / gunicorn / Claude Code CLI 는 컨테이너 이미지 안에 둔다.
 > OS 에 Python 과 Claude CLI 를 직접 설치하는 방식은 [DEPLOYMENT.md](DEPLOYMENT.md) 를 본다.
 > 두 방식은 같은 소스, 같은 DB 스키마, 같은 데이터 경로를 쓴다. 서로 오갈 수 있다.
 
+> **운영 서버(nfs-181)를 실제로 다시 설치할 때는
+> [DEPLOYMENT_SERVER_NFS181.md](DEPLOYMENT_SERVER_NFS181.md) 를 본다.**
+> 이 문서는 일반 가이드이고, 그 문서에는 그 서버의 실제 값(포트 19780,
+> 데이터 경로, 기존 podman 과의 공존, 실제로 겪은 장애와 조치)이 들어 있다.
+
 ---
 
 ## 0. 이번 Docker 화의 핵심
@@ -100,6 +105,11 @@ df -h /var /opt
 
 ```bash
 # 배포판 기본 컨테이너 도구가 있으면 먼저 지운다 (Docker 공식 문서 요구사항)
+#
+# 주의: 이 서버에서 **다른 시스템이 podman 을 쓰고 있다면 podman 을 지우면 안 된다.**
+#       그때는 아래 목록에서 podman / runc 를 빼고, docker 라는 이름의 래퍼를
+#       심는 podman-docker 패키지만 지운다.  ->  dnf remove -y podman-docker
+#       (실제 사례: DEPLOYMENT_SERVER_NFS181.md 3절)
 dnf remove -y docker docker-client docker-client-latest docker-common \
               docker-latest docker-latest-logrotate docker-logrotate \
               docker-engine podman runc

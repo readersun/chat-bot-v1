@@ -34,6 +34,8 @@ claude-web/
 ├── .env.example
 ├── DEPLOYMENT.md        운영 배포 가이드 - OS 에 직접 설치
 ├── DEPLOYMENT_DOCKER.md 운영 배포 가이드 - Docker
+├── DEPLOYMENT_SERVER_NFS181.md
+│                     운영 서버 재설치 런북 (nfs-181 전용)
 ├── compose.yml          운영 Docker Compose (nginx + app)
 ├── compose.dev.yml      개발용 override (gunicorn --reload)
 ├── .dockerignore
