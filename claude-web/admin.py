@@ -14,6 +14,8 @@ admin
   엔드포인트는 없다. (요구사항 27)
 - 자격증명은 화면으로 내보내지 않는다. API Key 는 마스킹된 미리보기만,
   Claude CLI 인증은 "정상 / 실패" 상태만 보여준다.
+- Storage 탭은 용량 "확인" 전용이다. 첨부파일 일괄 삭제나 자동 정리 기능은
+  의도적으로 만들지 않았다. (실수로 운영 데이터가 사라지는 것을 막는다)
 """
 
 import os
@@ -24,6 +26,7 @@ from flask import Blueprint, abort, jsonify, render_template, request
 import config
 import providers
 import settings_store
+import storage as storage_module
 from auth import (
     admin_required, create_user, current_user, public_user, set_password,
     user_by_id, validate_username,
@@ -33,7 +36,7 @@ from db import audit, get_db, row_to_dict, ts
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 api = Blueprint("admin_api", __name__, url_prefix="/api/admin")
 
-TABS = ("dashboard", "users", "claude", "system")
+TABS = ("dashboard", "users", "claude", "system", "storage")
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +141,21 @@ def summary():
             "max_images_per_message": config.MAX_IMAGES_PER_MESSAGE,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# 저장공간 (Storage)
+#
+# 관리자만 볼 수 있다. 용량 "확인" 만 제공하고 삭제 기능은 두지 않는다.
+# 실수로 운영 데이터가 지워지는 것을 막기 위한 의도적인 제한이다.
+# 계산은 storage.py 가 하고 짧게 캐시한다. ?refresh=1 이면 다시 계산한다.
+# ---------------------------------------------------------------------------
+@api.get("/storage")
+@admin_required
+def storage():
+    db = get_db()
+    refresh = (request.args.get("refresh") or "").strip() in ("1", "true", "yes")
+    return jsonify(ok=True, storage=storage_module.report(db, refresh=refresh))
 
 
 # ---------------------------------------------------------------------------

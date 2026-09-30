@@ -9,6 +9,19 @@
 <meta name="theme-color" content="#202126" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
 <link rel="stylesheet" href="/static/shared.css">
+<style>
+/* Storage 탭의 사용률 막대. 이 페이지에서만 쓰므로 shared.css 에 넣지 않는다. */
+.meter {
+  height: 10px;
+  margin: 0 0 14px;
+  border-radius: 999px;
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.meter .fill { display: block; height: 100%; background: var(--ok-fg); }
+.meter .fill.warn { background: var(--warn-fg); }
+.meter .fill.danger { background: var(--danger); }
+</style>
 </head>
 <body>
 
@@ -24,6 +37,7 @@
   <a href="/admin/users" class="{{ 'active' if tab == 'users' }}">Users</a>
   <a href="/admin/claude" class="{{ 'active' if tab == 'claude' }}">Claude 설정</a>
   <a href="/admin/system" class="{{ 'active' if tab == 'system' }}">System</a>
+  <a href="/admin/storage" class="{{ 'active' if tab == 'storage' }}">Storage</a>
 </nav>
 
 <main class="page" id="page" data-tab="{{ tab }}">
@@ -186,7 +200,14 @@
     if (!n && n !== 0) { return "-"; }
     if (n < 1024) { return n + " B"; }
     if (n < 1048576) { return (n / 1024).toFixed(1) + " KB"; }
-    return (n / 1048576).toFixed(1) + " MB";
+    if (n < 1073741824) { return (n / 1048576).toFixed(1) + " MB"; }
+    if (n < 1099511627776) { return (n / 1073741824).toFixed(1) + " GB"; }
+    return (n / 1099511627776).toFixed(2) + " TB";
+  }
+
+  function num(n) {
+    if (n === null || n === undefined) { return "-"; }
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
 
   function warningsBlock(list) {
@@ -608,6 +629,138 @@
       });
   }
 
+  /* ------------------------------------------------------------- 저장공간
+     용량 "확인" 전용 화면이다. 삭제 기능은 의도적으로 넣지 않는다.
+     계산은 서버가 짧게 캐시하고, [새로고침] 이 강제로 다시 계산한다. */
+  function meter(percent, status) {
+    var bar = el("div", { class: "meter" },
+      [el("span", { class: "fill " + status, style: "width:" + Math.min(100, percent) + "%" })]);
+    return bar;
+  }
+
+  function statusBadge(status, percent, th) {
+    if (status === "danger") { return badge(false, "위험 (" + th.danger + "% 이상)", "bad"); }
+    if (status === "warn") { return badge(false, "주의 (" + th.warn + "% 이상)", "warn"); }
+    return badge(true, "정상 (" + th.warn + "% 미만)", "ok");
+  }
+
+  function renderStorage(refresh) {
+    var url = "/api/admin/storage" + (refresh ? "?refresh=1" : "");
+    return api("GET", url).then(function (res) {
+      clear(content);
+      var d = res.storage;
+      var disk = d.disk;
+      var th = d.thresholds;
+
+      /* --- 디스크 --- */
+      var diskKids = [];
+      if (disk) {
+        diskKids.push(el("div", { class: "row", style: "margin-bottom:10px" },
+          [statusBadge(disk.status, disk.percent, th)]));
+        diskKids.push(meter(disk.percent, disk.status));
+        diskKids.push(kv([
+          ["Total", bytes(disk.total)],
+          ["Used", bytes(disk.used) + " (" + disk.percent + "%)"],
+          ["Available", bytes(disk.free)],
+          ["측정 기준 경로", d.monitor_path, true]
+        ]));
+        if (disk.status !== "ok") {
+          diskKids.push(el("div", { class: "alert " + (disk.status === "danger" ? "error" : "warn"),
+            text: disk.status === "danger"
+              ? "디스크 사용률이 " + th.danger + "% 를 넘었습니다. 공간을 확보하세요."
+              : "디스크 사용률이 " + th.warn + "% 를 넘었습니다. 추이를 지켜보세요." }));
+        }
+      } else {
+        diskKids.push(el("div", { class: "alert warn",
+          text: "디스크 정보를 읽을 수 없습니다. 경로를 확인하세요: " + d.monitor_path }));
+      }
+      content.appendChild(block("Disk Usage",
+        "데이터가 실제로 저장되는 파일시스템 기준입니다. (컨테이너 root filesystem 이 아닙니다)",
+        diskKids));
+
+      /* --- 애플리케이션 데이터 --- */
+      var rows = d.items.map(function (it) {
+        var note = "";
+        if (it.key === "workspace" && !it.configured) { note = "설정되지 않음"; }
+        else if (it.key === "other") { note = "데이터 루트의 기타 파일"; }
+        return el("tr", {}, [
+          el("td", { text: it.label }),
+          el("td", { class: "mono", text: bytes(it.bytes) }),
+          el("td", { class: "mono", text: it.files === null ? "-" : num(it.files) }),
+          el("td", { class: "muted", text: note })
+        ]);
+      });
+      rows.push(el("tr", {}, [
+        el("th", { text: "Total Application Data" }),
+        el("th", { class: "mono", text: bytes(d.app_total) }),
+        el("th", { text: "" }),
+        el("th", { text: "" })
+      ]));
+
+      var refreshBtn = el("button", { class: "btn", type: "button", onclick: function () {
+        this.disabled = true;
+        clear(content);
+        content.appendChild(el("p", { class: "muted", text: "다시 계산하는 중..." }));
+        renderStorage(true).catch(function (e) {
+          clear(content);
+          content.appendChild(el("div", { class: "alert error", text: e.message }));
+        });
+      } }, ["새로고침"]);
+
+      content.appendChild(block("Application Data", null, [
+        table(["항목", "용량", "파일 수", ""], rows),
+        el("p", { class: "desc", text:
+          "계산 시각 " + d.computed_at + " · " + d.elapsed_ms + "ms 소요"
+          + (d.cached ? " · 캐시된 값 (" + d.cache_age_sec + "초 전)" : " · 방금 계산") }),
+        el("div", { class: "row" }, [refreshBtn])
+      ]));
+
+      /* --- 파일 수 / 제한 --- */
+      var chatDisk = d.items.filter(function (i) { return i.key === "chat"; })[0];
+      var noteDisk = d.items.filter(function (i) { return i.key === "notes"; })[0];
+      content.appendChild(block("Files", null, [
+        kv([
+          ["Chat Attachments",
+           bytes(chatDisk.bytes) + " / " + num(chatDisk.files) + " files"],
+          ["Note Attachments",
+           bytes(noteDisk.bytes) + " / " + num(noteDisk.files) + " files"],
+          ["메모 개수", num(d.notes.total) + " (공유 " + num(d.notes.public) + ")"],
+          ["Chat Attachment Limit",
+           d.limits.chat_attachment_mb + " MB × 최대 " + d.limits.chat_max_files + "개"],
+          ["Note Attachment Limit",
+           d.limits.note_attachment_mb + " MB × 최대 " + d.limits.note_max_files + "개"]
+        ]),
+        el("p", { class: "desc", text:
+          "파일 수는 DB 기록 기준, 용량은 디스크 순회 기준입니다. DB 에 기록된 합계는 "
+          + "채팅 " + bytes(d.db_recorded.chat_bytes) + " / 메모 "
+          + bytes(d.db_recorded.note_bytes) + " 입니다. "
+          + "디스크 용량이 이보다 크면 DB 에 없는 파일이 남아 있다는 뜻입니다." })
+      ]));
+
+      /* --- 사용자별 --- */
+      if (d.per_user && d.per_user.length) {
+        var urows = d.per_user.map(function (u) {
+          return el("tr", {}, [
+            el("td", { text: u.user }),
+            el("td", { class: "mono", text: bytes(u.chat_bytes) }),
+            el("td", { class: "mono", text: bytes(u.note_bytes) }),
+            el("td", { class: "mono", text: bytes(u.total_bytes) })
+          ]);
+        });
+        content.appendChild(block("사용자별 첨부파일 사용량",
+          "DB 에 기록된 파일 크기 합계입니다. 사용량이 0 인 사용자는 표시하지 않습니다.",
+          [table(["사용자", "Chat", "Notes", "Total"], urows)]));
+      }
+
+      content.appendChild(block("안내", null, [
+        el("p", { class: "desc", text:
+          "이 화면은 용량 확인 전용입니다. 첨부파일 일괄 삭제나 오래된 파일 자동 정리 기능은 "
+          + "의도적으로 제공하지 않습니다. 정리가 필요하면 사용자가 직접 세션/메모를 삭제하거나 "
+          + "운영자가 백업 후 수동으로 처리하세요." })
+      ]));
+    });
+  }
+
   /* ----------------------------------------------------------------- 실행 */
   function render() {
     clear(content);
@@ -615,6 +768,7 @@
     var fn = TAB === "users" ? renderUsers
       : TAB === "claude" ? renderClaude
       : TAB === "system" ? renderSystem
+      : TAB === "storage" ? renderStorage
       : renderDashboard;
     fn().catch(function (e) {
       clear(content);

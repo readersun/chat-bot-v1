@@ -5,8 +5,10 @@
  *   - 앱 셸("/")은 더 이상 캐시하지 않는다.
  *     로그인 후의 "/" 응답에는 로그인한 사용자 이름과 CSRF 토큰이 들어간다.
  *     이를 캐시하면 같은 기기를 쓰는 다른 사람에게 노출될 수 있다.
- *   - /api/*, /admin/*, /login, /logout, /setup 도 캐시하지 않는다.
- *     대화 내용, 첨부 이미지, 관리자 설정이 디스크에 남지 않아야 한다.
+ *   - /api/*, /admin/*, /notes, /login, /logout, /setup 도 캐시하지 않는다.
+ *     대화 내용, 첨부 이미지, 관리자 설정, 개인 메모가 디스크에 남지 않아야 한다.
+ *     메모 API(/api/notes)와 메모 첨부(/api/note-attachments)는 /api/ 규칙에
+ *     이미 걸리지만, 의도를 분명히 하려고 /notes 를 목록에 함께 적어 둔다.
  *   - 캐시 대상은 로그인과 무관한 정적 리소스(아이콘/CSS/manifest)뿐이다.
  *
  * 그래서 오프라인일 때는 안내 페이지만 뜬다. 인증이 필요한 앱에서는
@@ -15,7 +17,7 @@
  * VERSION 을 올리면 activate 에서 이전 캐시를 통째로 지운다.
  * v1 이 캐시해 둔 "/" 응답도 이때 함께 제거된다.
  */
-const VERSION = "claude-web-v3";
+const VERSION = "claude-web-v4";
 
 const SHELL = [
   "/manifest.webmanifest",
@@ -26,7 +28,8 @@ const SHELL = [
 ];
 
 // 어떤 경우에도 캐시하지 않을 경로
-const NEVER_CACHE = ["/api/", "/admin", "/login", "/logout", "/setup", "/health", "/sw.js"];
+const NEVER_CACHE = ["/api/", "/admin", "/notes", "/login", "/logout", "/setup",
+                     "/health", "/sw.js"];
 
 function isPrivate(pathname) {
   return NEVER_CACHE.some((p) => pathname === p || pathname.startsWith(p));

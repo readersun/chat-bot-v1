@@ -41,7 +41,7 @@ Python 패키지 / Claude CLI / OS 패키지가 바뀔 때만 이미지를 새�
   │      .env                            <- 서버 설정 + 이미지 태그      │
   │                                                                    │
   │  /var/lib/claude-web                 <- 데이터 (git 밖)             │
-  │      chat.db  chat.db-wal  uploads/  workspace/  backups/          │
+  │      chat.db  chat.db-wal  uploads/  notes/  workspace/  backups/  │
   │                                                                    │
   │  docker volume claude-web-home       <- Claude 인증 / 세션 히스토리  │
   │                                                                    │
@@ -618,7 +618,7 @@ reply         OK
 | # | 항목 | 확인 |
 |---|---|---|
 | 1 | 로그인 / 로그아웃 | |
-| 2 | 관리자 페이지 4개 탭 (dashboard / users / claude / system) | |
+| 2 | 관리자 페이지 5개 탭 (dashboard / users / claude / system / storage) | |
 | 3 | 사용자 생성 → 그 계정으로 로그인 | |
 | 4 | 프로젝트 생성 / 이름 변경 (한글) | |
 | 5 | 세션 생성 (private) | |
@@ -630,6 +630,17 @@ reply         OK
 | 11 | 업로드한 이미지에 대해 질문 → Claude 가 내용을 읽는지 | |
 | 12 | 새로고침 후 대화 유지 | |
 | 13 | 모바일 브라우저에서 접속 / 화면 동작 | |
+| 14 | 메모 생성 (제목 / 내용 / 공개 범위 private) | |
+| 15 | 메모에 파일 첨부 (png / pdf / txt) → 다시 열기 | |
+| 16 | 메모 수정 / 첨부 추가 / 첨부 삭제 / 메모 삭제 | |
+| 17 | public 메모 → 다른 계정에서 "공유 메모" 에 보이는지 | |
+| 18 | 다른 사람의 private 메모 URL·첨부 URL 직접 입력 → 접근 거부 | |
+| 19 | 남의 public 메모 수정/삭제 시도 → 차단 | |
+| 20 | 10MB 넘는 파일 첨부 → 거부되고 화면이 깨지지 않는지 | |
+| 21 | 메모 제목 검색 / [내 메모] [공유 메모] 필터 | |
+| 22 | 모바일에서 메모 목록 → 선택 → 보기/수정 흐름 | |
+| 23 | 관리자 Storage 탭 : 디스크 / 앱 데이터 / 파일 수 / [새로고침] | |
+| 24 | 일반 사용자로 `/admin/storage` 직접 입력 → 403 | |
 
 > **평문 HTTP 로 서비스하면 PWA(서비스워커 / 홈 화면에 추가)는 동작하지 않는다.**
 > 브라우저는 서비스워커를 `https:` 또는 `localhost` 에서만 등록한다.
@@ -652,6 +663,18 @@ curl -fsSI http://127.0.0.1/sw.js | grep -i service-worker-allowed   # : /
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1/manifest.webmanifest
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1/static/shared.css
 docker compose exec app claude -p "Respond only with OK"
+```
+
+메모와 Storage 도 서버에서 바로 확인할 수 있다. (`-b` 쿠키는 로그인 후 받은 것)
+
+```bash
+# 컨테이너 안에서 : 데이터가 실제 볼륨에 들어가는지
+docker compose exec app ls -ld /var/lib/claude-web/notes
+docker compose exec app sh -c 'ls -R /var/lib/claude-web/notes | head -20'
+
+# down/up 후에도 메모가 남는지 (36번 요구사항)
+docker compose down && docker compose up -d
+docker compose exec -T app python -c   "from db import connect; c=connect(); print('notes:', c.execute('SELECT COUNT(*) FROM notes').fetchone()[0],    'attachments:', c.execute('SELECT COUNT(*) FROM note_attachments').fetchone()[0])"
 ```
 
 ---
@@ -854,6 +877,26 @@ docker compose run --rm --no-deps app python app.py migrate
 마이그레이션 완료.  / 백업: ...   # 적용됨
 ```
 
+#### 스키마 버전 이력
+
+| 버전 | 내용 |
+|---|---|
+| v2 | 로그인 / 권한 도입 (`users`, `settings`, `sessions.owner_id`, `visibility`) |
+| v3 | `attachments.file_path` 를 `UPLOAD_DIR` 기준 상대경로로 변환 |
+| **v4** | **메모 기능: `notes`, `note_attachments` 테이블 추가** |
+
+v4 는 **테이블을 추가만** 한다. 기존 테이블의 컬럼과 데이터를 전혀 건드리지 않아
+채팅 기능에 영향이 없다. 실제로 데이터가 들어 있는 v3 DB 로 검증했다.
+
+```bash
+# 배포 전에 현재 버전 확인
+docker compose exec -T app python -c   "from db import connect; print('user_version =', connect().execute('PRAGMA user_version').fetchone()[0])"
+
+# 적용 후 확인
+docker compose exec -T app python -c   "from db import connect; c=connect(); print([r[0] for r in c.execute(   \"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'note%'\")])"
+# -> ['notes', 'note_attachments']
+```
+
 ---
 
 ## 16. 백업과 복구
@@ -918,6 +961,11 @@ docker compose run --rm --no-deps app sh -c '
   tar -xzf /var/lib/claude-web/backups/uploads-20260930-115610.tar.gz \
       -C /var/lib/claude-web
 '
+# 메모 첨부도 되돌릴 때
+docker compose run --rm --no-deps app sh -c '
+  tar -xzf /var/lib/claude-web/backups/notes-20260930-115610.tar.gz \
+      -C /var/lib/claude-web
+'
 docker compose start app
 docker compose logs --tail=50 app
 ```
@@ -964,7 +1012,7 @@ docker compose exec app claude -p "Respond only with OK"
 | 컨테이너 경로 | host | 모드 | 소유자 | 내용 |
 |---|---|---|---|---|
 | `/app` | `/opt/claude-web/claude-web` | `ro,z` | (host 그대로) | 소스. 앱이 쓰지 않는다 |
-| `/var/lib/claude-web` | `/var/lib/claude-web` | `rw,z` | `claudeweb:claudeweb 0750` | chat.db, uploads, workspace, backups |
+| `/var/lib/claude-web` | `/var/lib/claude-web` | `rw,z` | `claudeweb:claudeweb 0750` | chat.db, uploads, **notes**, workspace, backups |
 | `/home/claudeweb` | volume `claude-web-home` | `rw` | `claudeweb:claudeweb 0700` | Claude 인증, 세션 히스토리 |
 | `/etc/nginx/conf.d/default.conf` | `./docker/nginx.conf` | `ro,z` | (host 그대로) | nginx 설정 |
 
@@ -995,6 +1043,10 @@ docker volume ls | grep claude-web
   (`project_1/session_2/<uuid>.png`). 그래서 개발 PC 에서 만든 DB 를 그대로 서버로
   옮겨도 첨부가 깨지지 않는다. 절대경로가 남아 있는 옛 DB 는 마이그레이션 v3 가
   자동으로 변환한다.
+- 메모 첨부도 같은 규칙이다. `NOTES_DIR`(= `/var/lib/claude-web/notes`) 기준
+  상대경로(`user_3/note_12/<uuid>.pdf`)로 저장된다. 같은 데이터 볼륨 안이라
+  **compose 설정을 바꿀 필요가 없고**, `docker compose down` → `up -d` 후에도
+  메모와 첨부가 그대로 남는다.
 
 ---
 
@@ -1179,7 +1231,7 @@ setsebool -P httpd_can_network_connect 1        # Rocky/RHEL 에서 필수
 | `docker compose exec` 기본 사용자 | `uid=1000(claudeweb)` (root 아님) |
 | `/app` 읽기 전용 | `touch /app/x` → `Read-only file system` |
 | 데이터 권한 | `/var/lib/claude-web` 0750 claudeweb, `chat.db` 0600 |
-| 스키마 | `user_version=3`, `journal_mode=wal` |
+| 스키마 | `user_version=4`, `journal_mode=wal` |
 | 기능 테스트 27항목 (nginx 경유) | 전부 통과 — 로그인, 한글 프로젝트/세션 생성, private/public, 이미지 업로드, 첨부 다운로드 md5 일치, `/sw.js`+`Service-Worker-Allowed: /`, manifest, static, `/admin/`, 설정 API, API Key 비노출, 비로그인 private 세션 401 |
 | 최초 관리자 생성 | `python app.py create-admin` 로 생성 |
 | `down` → `up` 데이터 보존 | users/projects/sessions/messages/attachments/settings 전부 동일, 업로드 파일 유지 |
@@ -1192,13 +1244,20 @@ setsebool -P httpd_can_network_connect 1        # Rocky/RHEL 에서 필수
 | app 컨테이너 IP 변경 후 nginx | IP `172.22.0.2 → 172.22.0.7`, nginx 재시작 없이 HTTP 200 |
 | `restart: unless-stopped` | gunicorn master 강제 종료 → 컨테이너 자동 재시작, healthy 복귀 |
 | 명시적 마이그레이션 | `docker compose run --rm --no-deps app python app.py migrate` 동작 |
-| 백업 스크립트 | DB 온라인 백업 + `integrity_check ok` + uploads tar + `.env` 0600 + 보관기간 정리 |
+| 백업 스크립트 | DB 온라인 백업 + `integrity_check ok` + uploads/notes tar + `.env` 0600 + 보관기간 정리 |
+| **v3 → v4 마이그레이션** | 데이터가 든 v3 DB(users 2 / sessions 2 / messages 5 / attachments 1)로 실행 → 전부 보존, 자동 백업 생성, `integrity_check ok`, 재실행 무해 |
+| **메모 + Storage 기능 116항목** | 전부 통과 — 생성/조회/수정/삭제, private·public 권한, 첨부 업로드·다운로드·삭제, 10MB 제한, 위장 파일 거부, CSRF, 관리자 전용 Storage, 기존 기능 회귀 |
+| 같은 116항목을 Linux 컨테이너에서 재실행 | 전부 통과 (uid 1000, 데이터는 `/var/lib/claude-web`) |
+| 저장공간 계산 정확도 | `storage.py` 결과 = `os.walk` 합계와 완전 일치. 데이터 루트 안의 항목 중복 집계 없음 (합계 = 루트 전체와 일치) |
+| 심볼릭 링크 무시 | Linux 에서 디렉터리 링크(`/usr`)·파일 링크·순환 링크 모두 따라가지 않음. 권한 없는 디렉터리를 만나도 예외 없음 |
+| 렌더된 JS 문법 | `/`, `/notes`, `/admin/storage` 세 화면의 인라인 JS 를 `node --check` 로 검사 통과. `innerHTML`/`eval` 미사용 |
 
 ### 검증하지 못함 (운영 서버에서 확인해야 한다)
 
 | 항목 | 이유 |
 |---|---|
 | **`claude -p` 실제 응답** | 컨테이너에 인증정보가 없다. `Not logged in · Please run /login` 까지만 확인. **§8 을 끝낸 뒤 반드시 직접 확인한다** |
+| **메모/Storage 화면의 실제 브라우저 조작** | 개발 PC 의 Chrome 이 테스트 서버에 접근하지 못하는 환경이었다. HTTP 계층은 116항목으로 검증했고 JS 는 문법 검사까지 했지만, **클릭·모바일 레이아웃은 §11 의 14~24번으로 직접 확인해야 한다** |
 | Claude 최초 로그인 흐름 | 브라우저 + 사내 Claude 계정이 필요하다 |
 | Claude `--resume` 문맥 유지 / 이미지 분석 | 인증 후에만 가능하다 |
 | Rocky Linux 에서의 Docker 설치 | 개발 PC 는 Windows 다. 공식 문서 명령을 그대로 실었다 |

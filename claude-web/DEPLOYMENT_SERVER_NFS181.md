@@ -191,7 +191,7 @@ ls compose.yml docker/Dockerfile  # 둘 다 보여야 한다
 
 ## 7. 데이터 디렉터리
 
-DB / 업로드 이미지 / Claude 작업 디렉터리 / 백업이 들어간다.
+DB / 업로드 이미지 / 메모 첨부파일 / Claude 작업 디렉터리 / 백업이 들어간다.
 컨테이너 안 경로는 항상 `/var/lib/claude-web` 이고, **host 경로만 바꿀 수 있다.**
 
 이 서버는 `VFree 0` 이라 `/` 를 늘릴 수 없고, `/` 에는 다른 시스템도 얹혀 있다.
@@ -206,7 +206,8 @@ ls -ld /home/claude-web-data
 
 - `1000:1000` 은 컨테이너 안 `claudeweb` 사용자의 UID/GID 다.
   이 서버에서는 host 의 `gemiso` 계정과 같은 번호라 `gemiso gemiso` 로 표시된다. 정상이다.
-- 하위 디렉터리(`uploads`, `workspace`, `backups`)는 `init` 컨테이너가 만들고
+- 하위 디렉터리(`uploads`, `notes`, `workspace`, `backups`)는 `init` 컨테이너가
+  만들고
   소유권도 맞춰준다. 직접 만들지 않아도 된다.
 
 > `/home` 이 XFS 라 줄여서 `/` 에 붙이는 것은 불가능하다(XFS 는 축소 불가).
@@ -477,6 +478,14 @@ curl -sI  http://127.0.0.1:19780/ | head -3
 11. 재접속 시 로그인 유지
 12. `docker compose restart app` 후 로그인 유지 (= `SECRET_KEY` 고정 확인)
 13. `docker compose logs app` 에 API key 나 메시지 본문이 찍히지 않는지
+14. 메모 생성 (제목 / 내용 / 공개 범위) → 재접속 후에도 남아 있는지
+15. 메모에 파일 첨부 (png / pdf / txt) → 다시 열기
+16. 메모 수정 / 첨부 추가 / 첨부 삭제 / 메모 삭제
+17. public 메모를 다른 계정에서 "공유 메모" 로 읽을 수 있고 **수정은 막히는지**
+18. 다른 사람의 private 메모 URL·첨부 URL 직접 입력 → 접근 거부
+19. 10MB 넘는 파일 첨부 → 거부되고 화면이 깨지지 않는지
+20. 관리자 Storage 탭에서 디스크/앱 데이터 값이 `df -h` `du -sh` 와 비슷한지
+21. 일반 사용자로 `/admin/storage` 직접 입력 → 403
 
 ### PWA(홈 화면 추가)는 이 구성에서 동작하지 않는다
 
@@ -541,6 +550,12 @@ ls -l /home/claude-web-data/backups/
 
 ```bash
 cd /data/chat-bot-v1/claude-web
+# 이번 메모/Storage 기능 반영 : 의존성 변경이 없으므로 재빌드 불필요
+#   DB 마이그레이션(notes / note_attachments 추가)은 app 기동 시 자동 수행되고,
+#   변경 전에 backups/ 에 자동 백업을 남긴다.
+git pull && docker compose restart app
+docker compose logs --tail=30 app | grep -i migrat
+
 
 # 소스만 바뀐 경우  -> 재빌드 없음
 git pull && docker compose restart app
@@ -572,7 +587,9 @@ docker builder prune -f            # 빌드 캐시 회수 (수백 MB)
 | 내용 | 위치 | 비고 |
 |---|---|---|
 | 대화 내용 (텍스트) | `/home/claude-web-data/chat.db` | SQLite |
-| 첨부 이미지 | `/home/claude-web-data/uploads/` | 세션/프로젝트 삭제 시 함께 삭제됨 |
+| 채팅 첨부 이미지 | `/home/claude-web-data/uploads/` | 세션/프로젝트 삭제 시 함께 삭제됨 |
+| 메모 (텍스트) | `/home/claude-web-data/chat.db` | `notes` 테이블 |
+| 메모 첨부파일 | `/home/claude-web-data/notes/` | 메모 삭제 시 함께 삭제됨 |
 | Claude 작업 디렉터리 | `/home/claude-web-data/workspace/` | |
 | 백업 | `/home/claude-web-data/backups/` | 10개 유지 |
 | Claude 인증 + 대화 기록 | Docker 볼륨 `claude-web-home` | `/var/lib/docker` 아래 = **`/` 에 있다** |

@@ -28,6 +28,11 @@ v1 에는 로그인이 없었다. 즉 기존 프로젝트/세션은 "그 서버�
 
 owner 가 NULL 인 세션은 이름 변경/삭제를 일반 사용자가 할 수 없고, 관리자가
 관리자 페이지에서 소유자를 지정하거나 삭제할 수 있다.
+
+v3 -> v4 (메모 기능 추가)
+-------------------------
+notes / note_attachments 테이블을 **추가만** 한다. 기존 테이블의 컬럼이나 데이터는
+전혀 건드리지 않으므로 채팅 기능에 영향이 없고, 실패해도 롤백되어 원래대로 남는다.
 """
 
 import os
@@ -40,7 +45,7 @@ from flask import g
 
 from config import BACKUP_DIR, DATABASE_PATH, UPLOAD_DIR
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -122,6 +127,44 @@ CREATE TABLE IF NOT EXISTS attachments (
     FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
 );
 
+-- 메모 (v4)
+-- 채팅과 완전히 독립적인 기능이다. sessions 와 같은 private/public 개념을 쓴다.
+-- owner_id 를 ON DELETE SET NULL 로 둔 것은 sessions 와 같은 이유다. 관리자가
+-- 사용자를 지울 때 그 사람이 쓴 글이 조용히 사라지지 않게 한다. 소유자가 없는
+-- private 메모는 아무에게도 보이지 않지만 데이터는 남는다. (복구 가능)
+CREATE TABLE IF NOT EXISTS notes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id   INTEGER,
+    title      TEXT NOT NULL DEFAULT '',
+    content    TEXT NOT NULL DEFAULT '',
+    visibility TEXT NOT NULL DEFAULT 'private'
+               CHECK (visibility IN ('private', 'public')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 기존 attachments 를 범용으로 확장(session_id 를 nullable 로 바꾸고 종류 컬럼을
+-- 추가)하는 방법도 검토했지만 택하지 않았다.
+--   - attachments.session_id 는 NOT NULL + FK 다. sqlite 는 ALTER 로 NOT NULL 을
+--     풀 수 없어 **운영 데이터가 들어 있는 테이블을 재생성**해야 한다.
+--     (임시 테이블 생성 -> 복사 -> 삭제 -> 이름 변경)
+--   - 재생성 중 실패하면 채팅 첨부파일 전체가 위험하다. 얻는 것보다 잃을 게 크다.
+-- 그래서 구조만 같게 맞춘 별도 테이블을 만든다. 채팅 쪽은 한 줄도 바뀌지 않는다.
+-- file_path 는 attachments 와 같은 규칙으로 **NOTES_DIR 기준 상대경로**를 넣는다.
+-- (절대경로를 넣으면 DB 를 다른 서버로 옮길 때 전부 열리지 않는다. v2->v3 참고)
+CREATE TABLE IF NOT EXISTS note_attachments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_id       INTEGER NOT NULL,
+    original_name TEXT NOT NULL,
+    stored_name   TEXT NOT NULL,
+    file_path     TEXT NOT NULL,
+    mime_type     TEXT NOT NULL,
+    file_size     INTEGER NOT NULL,
+    created_at    TEXT NOT NULL,
+    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER,
@@ -146,6 +189,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions_owner     ON sessions(owner_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session   ON messages(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments(session_id);
+CREATE INDEX IF NOT EXISTS idx_notes_owner        ON notes(owner_id);
+CREATE INDEX IF NOT EXISTS idx_notes_updated      ON notes(updated_at);
+CREATE INDEX IF NOT EXISTS idx_note_att_note      ON note_attachments(note_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created      ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_login_attempts     ON login_attempts(created_at);
 """
@@ -296,7 +342,8 @@ def prune_backups(keep=10):
 def pending_migrations(conn):
     """적용해야 할 변경 목록을 사람이 읽을 수 있는 문자열로 돌려준다."""
     todo = []
-    for t in ("users", "settings", "session_members", "audit_logs", "login_attempts"):
+    for t in ("users", "settings", "session_members", "audit_logs", "login_attempts",
+              "notes", "note_attachments"):
         if not table_exists(conn, t):
             todo.append("CREATE TABLE %s" % t)
     if table_exists(conn, "sessions"):
@@ -314,7 +361,7 @@ def pending_migrations(conn):
 
 
 def has_data(conn):
-    for t in ("projects", "sessions", "messages"):
+    for t in ("projects", "sessions", "messages", "notes"):
         if table_exists(conn, t):
             if conn.execute("SELECT 1 FROM %s LIMIT 1" % t).fetchone():
                 return True

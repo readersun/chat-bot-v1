@@ -23,6 +23,9 @@ admin
 
 session_members 는 지금은 비어 있지만(향후 shared 용) 규칙에는 이미 반영해
 두었다. 나중에 shared 를 붙일 때 이 파일만 고치면 된다.
+
+메모(notes)의 규칙은 아래 "메모" 절에 따로 있다. 세션과 거의 같지만 public 메모를
+남이 고칠 수 없다는 점이 다르다.
 """
 
 from flask import abort
@@ -130,8 +133,74 @@ def require_manage_project(user):
 
 
 # ---------------------------------------------------------------------------
+# 메모 (notes)
+#
+# 세션과 규칙이 다른 점이 하나 있다. **public 메모는 다른 사람이 수정할 수 없다.**
+# 세션은 여러 사람이 함께 대화하는 공간이라 public 이면 쓰기를 허용하지만,
+# 메모는 작성자의 글이므로 owner 만 고칠 수 있다.
+#
+#                     조회   수정/삭제/공개범위 변경
+#   private  owner     O              O
+#            그 외     X              X
+#   public   owner     O              O
+#            로그인자  O              X
+#
+# admin 도 특별 취급하지 않는다. private 메모는 관리자에게도 보이지 않는다.
+# (세션과 같은 원칙. 관리자는 Storage 화면에서 용량 합계만 본다)
+# ---------------------------------------------------------------------------
+def is_note_owner(user, note):
+    if not user or note is None:
+        return False
+    owner_id = note["owner_id"]
+    return owner_id is not None and owner_id == user["id"]
+
+
+def can_view_note(user, note):
+    if not user or note is None:
+        return False
+    if is_note_owner(user, note):
+        return True
+    return note["visibility"] == PUBLIC
+
+
+def can_manage_note(user, note):
+    """수정 / 삭제 / 공개범위 변경 / 첨부 추가·삭제. 소유자만."""
+    return is_note_owner(user, note)
+
+
+def require_view_note(user, note):
+    if not can_view_note(user, note):
+        # 존재 여부까지 숨긴다. 남의 private 메모 id 를 찍어봐도 404 만 보인다.
+        abort(404, "메모를 찾을 수 없습니다.")
+
+
+def require_manage_note(user, note):
+    if not can_view_note(user, note):
+        abort(404, "메모를 찾을 수 없습니다.")
+    if not can_manage_note(user, note):
+        abort(403, "메모 작성자만 수정하거나 삭제할 수 있습니다.")
+
+
+# ---------------------------------------------------------------------------
 # 목록 조회용 SQL 조각
 # ---------------------------------------------------------------------------
+def visible_notes_clause(user, scope="all"):
+    """
+    메모 목록을 DB 단계에서 걸러낸다. (프론트에서 숨기는 방식이 아니다)
+    반환: (where 조각, 파라미터 list). 테이블 별칭은 n 이다.
+    scope : all | mine | shared
+      mine   내가 쓴 것 (private + public 모두)
+      shared 다른 사람의 public
+    """
+    uid = user["id"]
+    if scope == "mine":
+        return "n.owner_id = ?", [uid]
+    if scope == "shared":
+        return ("(n.visibility = 'public' AND (n.owner_id IS NULL OR n.owner_id != ?))",
+                [uid])
+    return "(n.owner_id = ? OR n.visibility = 'public')", [uid]
+
+
 def visible_sessions_clause(user, scope="all"):
     """
     세션 목록을 DB 단계에서 걸러낸다. (프론트에서 숨기는 방식이 아니다)

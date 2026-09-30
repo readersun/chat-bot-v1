@@ -17,6 +17,7 @@ claude-web
     auth.py            로그인 / CSRF / rate limit / 최초 관리자
     permissions.py     private/public 권한 규칙
     admin.py           관리자 페이지 + 관리 API
+    notes.py           개인/공유 메모 (화면 + API)
     app.py             화면과 채팅 API (이 파일)
 
 Project = 그룹핑(관리자가 관리), Session = 접근 권한 단위(소유자가 관리).
@@ -45,6 +46,7 @@ from werkzeug.exceptions import HTTPException
 import admin as admin_module
 import auth
 import config
+import notes as notes_module
 import permissions
 import providers
 import settings_store
@@ -57,12 +59,22 @@ UPLOAD_DIR = config.UPLOAD_DIR
 
 os.makedirs(os.path.dirname(config.DATABASE_PATH), exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(config.NOTES_DIR, exist_ok=True)
+
+# 요청 본문 한도는 Flask 전역 설정이라 채팅 첨부와 메모 첨부 중 **큰 쪽**에 맞춘다.
+# 각 라우트는 자기 기준(개수/용량)으로 다시 검사하므로 이 값이 크다고 해서
+# 채팅에 10MB 넘는 이미지가 들어오지는 않는다.
+# 기본값에서는 둘이 같아(10MB x 5 + 1MB = 51MiB) nginx 의 client_max_body_size(52m)를
+# 바꿀 필요가 없다. 한쪽을 올리면 nginx 설정도 함께 올려야 한다.
+_MAX_BODY = max(
+    config.MAX_UPLOAD_MB * max(config.MAX_IMAGES_PER_MESSAGE, 1),
+    config.MAX_NOTE_ATTACHMENT_MB * max(config.MAX_NOTE_ATTACHMENTS, 1),
+) * 1024 * 1024 + 1024 * 1024
 
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=config.SECRET_KEY,
-    MAX_CONTENT_LENGTH=(config.MAX_UPLOAD_MB * max(config.MAX_IMAGES_PER_MESSAGE, 1)
-                        * 1024 * 1024 + 1024 * 1024),
+    MAX_CONTENT_LENGTH=_MAX_BODY,
     JSON_AS_ASCII=False,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -74,6 +86,8 @@ app.teardown_appcontext(close_db)
 app.register_blueprint(auth.bp)
 app.register_blueprint(admin_module.bp)
 app.register_blueprint(admin_module.api)
+app.register_blueprint(notes_module.bp)
+app.register_blueprint(notes_module.api)
 
 
 # ---------------------------------------------------------------------------

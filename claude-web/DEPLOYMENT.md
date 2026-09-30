@@ -32,7 +32,8 @@
 | 가상환경 | `/opt/claude-web/venv` |
 | 서버 설정 | `/opt/claude-web/.env` (0600) |
 | DB | `/var/lib/claude-web/chat.db` |
-| 업로드 이미지 | `/var/lib/claude-web/uploads/` |
+| 채팅 첨부 이미지 | `/var/lib/claude-web/uploads/` |
+| 메모 첨부파일 | `/var/lib/claude-web/notes/` |
 | Claude 작업 디렉터리 | `/var/lib/claude-web/workspace/` |
 | 서비스 계정 HOME | `/var/lib/claude-web/home` (Claude 인증정보가 여기 있음) |
 | 자동 백업 | `/var/lib/claude-web/backups/` |
@@ -138,7 +139,7 @@ sudo chown -R claudeweb:claudeweb /opt/claude-web-repo
 
 ```
 .env                  SECRET_KEY 가 들어 있다
-data/                 chat.db, uploads/, backups/, setup-token.txt
+data/                 chat.db, uploads/, notes/, backups/, setup-token.txt
 venv/ __pycache__/ *.pyc
 .credentials.json     Claude 인증정보
 claude-auth.env       CLAUDE_CODE_OAUTH_TOKEN
@@ -152,6 +153,7 @@ claude-auth.env       CLAUDE_CODE_OAUTH_TOKEN
 ```bash
 sudo install -d -m 0750 -o claudeweb -g claudeweb /var/lib/claude-web
 sudo install -d -m 0750 -o claudeweb -g claudeweb /var/lib/claude-web/uploads
+sudo install -d -m 0750 -o claudeweb -g claudeweb /var/lib/claude-web/notes
 sudo install -d -m 0750 -o claudeweb -g claudeweb /var/lib/claude-web/workspace
 sudo install -d -m 0750 -o claudeweb -g claudeweb /var/lib/claude-web/backups
 sudo install -d -m 0700 -o claudeweb -g claudeweb /var/lib/claude-web/home
@@ -233,6 +235,7 @@ sudo -u claudeweb tee /opt/claude-web/.env >/dev/null <<'EOF'
 # --- 저장 위치 ---
 DATABASE_PATH=/var/lib/claude-web/chat.db
 UPLOAD_DIR=/var/lib/claude-web/uploads
+NOTES_DIR=/var/lib/claude-web/notes
 BACKUP_DIR=/var/lib/claude-web/backups
 
 # --- 웹 서버 (nginx 뒤. 루프백만 듣는다) ---

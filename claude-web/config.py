@@ -81,6 +81,17 @@ UPLOAD_DIR = os.path.abspath(
 BACKUP_DIR = os.path.abspath(
     os.getenv("BACKUP_DIR") or os.path.join(os.path.dirname(DATABASE_PATH), "backups"))
 
+# 메모 첨부파일. 기본값은 DB 와 같은 데이터 루트 아래이므로 Docker 배포에서
+# 이미 마운트된 볼륨(/var/lib/claude-web)에 들어간다. compose 수정이 필요 없다.
+NOTES_DIR = os.path.abspath(
+    os.getenv("NOTES_DIR") or os.path.join(os.path.dirname(DATABASE_PATH), "notes"))
+
+# 관리자 Storage 화면이 디스크 용량을 측정할 기준 경로.
+# 컨테이너의 root filesystem 이 아니라 **실제 데이터가 저장되는** 파일시스템을
+# 봐야 의미가 있으므로 기본값을 DB 가 있는 디렉터리로 잡는다.
+STORAGE_MONITOR_PATH = os.path.abspath(
+    os.getenv("STORAGE_MONITOR_PATH") or os.path.dirname(DATABASE_PATH))
+
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = env_int("PORT", 8080)
 
@@ -119,6 +130,42 @@ ALLOWED_IMAGES = {
     "webp": "image/webp",
     "gif": "image/gif",
 }
+
+# ---------------------------------------------------------------------------
+# 메모 첨부파일
+# ---------------------------------------------------------------------------
+# 파일 하나당 최대 크기. 채팅 이미지(MAX_UPLOAD_MB)와 별도로 둔다.
+MAX_NOTE_ATTACHMENT_MB = env_int("MAX_NOTE_ATTACHMENT_MB", 10)
+
+# 한 번의 요청으로 올릴 수 있는 개수.
+# 기본값 5 는 채팅(MAX_IMAGES_PER_MESSAGE)과 같게 맞춘 것이다. 덕분에 요청 본문
+# 최대 크기가 기존과 같아 nginx 의 client_max_body_size(52m)를 바꿀 필요가 없다.
+# 이 값이나 위 MB 를 올리면 nginx 설정도 함께 올려야 한다.
+MAX_NOTE_ATTACHMENTS = env_int("MAX_NOTE_ATTACHMENTS", 5)
+
+MAX_NOTE_TITLE_CHARS = env_int("MAX_NOTE_TITLE_CHARS", 200)
+MAX_NOTE_CONTENT_CHARS = env_int("MAX_NOTE_CONTENT_CHARS", 50000)
+
+# 확장자 -> 허용 MIME. 하나의 확장자가 여러 MIME 을 가질 수 있어 tuple 이다.
+# 실행 파일 / script / shell 은 넣지 않는다. 확장자만 믿지 않고 내용도 검사한다.
+# (notes.py 의 sniff_note_file)
+ALLOWED_NOTE_FILES = {
+    "png":  ("image/png",),
+    "jpg":  ("image/jpeg",),
+    "jpeg": ("image/jpeg",),
+    "webp": ("image/webp",),
+    "gif":  ("image/gif",),
+    "pdf":  ("application/pdf",),
+    "txt":  ("text/plain",),
+}
+
+# ---------------------------------------------------------------------------
+# 관리자 Storage 화면
+# ---------------------------------------------------------------------------
+# 디렉터리 용량 계산 결과를 이 초 동안 재사용한다. 파일이 많아지면 매 요청마다
+# 전체를 순회하는 비용이 커지므로 짧게 캐시한다. (Redis 같은 외부 저장소는 쓰지 않는다)
+# 화면의 [새로고침] 은 캐시를 무시하고 다시 계산한다.
+STORAGE_CACHE_SECONDS = env_int("STORAGE_CACHE_SECONDS", 60)
 
 # ---------------------------------------------------------------------------
 # 로그인 정책

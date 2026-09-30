@@ -12,10 +12,11 @@
 # 백업 대상
 #   1) chat.db   -> `python app.py backup` = sqlite 온라인 백업 API.
 #                   WAL 을 쓰므로 단순 cp 로는 일관성이 보장되지 않는다.
-#   2) uploads/  -> tar.gz
-#   3) .env      -> SECRET_KEY 가 들어 있다. 잃으면 전원 로그아웃 + 관리자 화면에
+#   2) uploads/  -> tar.gz   (채팅 첨부 이미지)
+#   3) notes/    -> tar.gz   (메모 첨부파일)
+#   4) .env      -> SECRET_KEY 가 들어 있다. 잃으면 전원 로그아웃 + 관리자 화면에
 #                   저장한 Claude API Key 를 복호화할 수 없다.
-#   4) Claude 인증 -> **일부러 제외한다.** 맨 아래 설명 참고.
+#   5) Claude 인증 -> **일부러 제외한다.** 맨 아래 설명 참고.
 #
 # 결과물은 컨테이너의 BACKUP_DIR(기본 /var/lib/claude-web/backups) 에 쌓인다.
 # 이 경로는 host 의 HOST_DATA_DIR 아래이므로 host 의 일반 백업 도구로 그대로
@@ -41,11 +42,14 @@ DATA_DIR="$(docker compose exec -T app python -c \
     "import config,os;print(os.path.dirname(config.DATABASE_PATH))" | tr -d '\r')"
 UP_DIR="$(docker compose exec -T app python -c \
     "import config;print(config.UPLOAD_DIR)" | tr -d '\r')"
+NOTES_DIR="$(docker compose exec -T app python -c \
+    "import config;print(config.NOTES_DIR)" | tr -d '\r')"
 OUT="$(docker compose exec -T app python -c \
     "import config;print(config.BACKUP_DIR)" | tr -d '\r')"
 
 echo "   DB      : $DATA_DIR/chat.db"
 echo "   uploads : $UP_DIR"
+echo "   notes   : $NOTES_DIR"
 echo "   저장    : $OUT  (컨테이너 경로 = host 의 HOST_DATA_DIR 아래)"
 echo
 
@@ -77,6 +81,20 @@ docker compose exec -T app sh -c '
     echo "업로드 백업: $out/uploads-$stamp.tar.gz"
 ' sh "$OUT" "$UP_DIR" "$STAMP"
 
+# --- 2-2) 메모 첨부 --------------------------------------------------------
+# 디렉터리가 아직 없을 수도 있다. (메모 기능을 아직 쓰지 않은 서버)
+# 그때는 건너뛰고 백업 전체를 실패시키지 않는다.
+docker compose exec -T app sh -c '
+    set -e
+    out="$1"; nt="$2"; stamp="$3"
+    if [ -d "$nt" ]; then
+        tar -czf "$out/notes-$stamp.tar.gz" -C "$(dirname "$nt")" "$(basename "$nt")"
+        echo "메모 백업  : $out/notes-$stamp.tar.gz"
+    else
+        echo "메모 백업  : 건너뜀 ($nt 없음)"
+    fi
+' sh "$OUT" "$NOTES_DIR" "$STAMP"
+
 # --- 3) .env (SECRET_KEY 포함 -> 0600) --------------------------------------
 docker compose exec -T app sh -c '
     set -e
@@ -90,7 +108,7 @@ docker compose exec -T app sh -c '
 docker compose exec -T app sh -c '
     out="$1"; keep="$2"
     find "$out" -maxdepth 1 -type f \
-        \( -name "chat.db.backup-*" -o -name "uploads-*.tar.gz" -o -name "env-*.bak" \) \
+        \( -name "chat.db.backup-*" -o -name "uploads-*.tar.gz" -o -name "notes-*.tar.gz" -o -name "env-*.bak" \) \
         -mtime "+$keep" -print -delete 2>/dev/null || true
 ' sh "$OUT" "$KEEP"
 

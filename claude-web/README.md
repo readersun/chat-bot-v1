@@ -11,12 +11,28 @@
 
 ```
 users ──owns──► sessions ──► messages ──► attachments
-                   │
-projects ──────────┘          settings        audit_logs
+  │                │
+  │  projects ─────┘            settings        audit_logs
+  │
+  └──owns──► notes ──► note_attachments
 ```
 
 - **Project** = 세션을 묶는 공용 그룹. 관리자가 만든다.
 - **Session** = 접근 권한의 단위. 만든 사람이 소유자이고 `private` / `public` 을 고른다.
+- **Note** = 채팅과 별개인 메모. 세션과 같은 `private` / `public` 개념을 쓰지만
+  **public 메모는 남이 읽기만 할 수 있다.** (세션은 함께 대화하므로 쓰기도 가능)
+
+기능은 두 갈래다.
+
+```
+로그인
+ ├─ 채팅 (/)          프로젝트 · 세션 · Claude 대화 · 세션 재개 · 이미지 첨부
+ └─ 메모 (/notes)     🔒 나만 보기 / 🌐 전체 공유 · 첨부파일 · 제목 검색
+
+관리자 (/admin)
+ ├─ Dashboard   ├─ Users   ├─ Claude 설정
+ ├─ System      └─ Storage  서버 / 앱 저장공간 확인 (확인 전용, 삭제 기능 없음)
+```
 
 ## 구조
 
@@ -28,8 +44,10 @@ claude-web/
 ├── settings_store.py    운영 설정(Claude 연결)을 DB 에서 관리
 ├── providers.py         Claude 호출 추상화 (CLI / API)
 ├── auth.py              로그인 / CSRF / rate limit / 최초 관리자
-├── permissions.py       private·public 권한 규칙 (단일 기준)
+├── permissions.py       private·public 권한 규칙 (세션 + 메모. 단일 기준)
 ├── admin.py             관리자 페이지 + 관리 API
+├── notes.py             개인/공유 메모 (화면 + API)
+├── storage.py           저장공간 계산 (관리자 Storage 탭)
 ├── requirements.txt
 ├── .env.example
 ├── DEPLOYMENT.md        운영 배포 가이드 - OS 에 직접 설치
@@ -56,9 +74,10 @@ claude-web/
 │   └── docker-update.sh Docker 배포용 업데이트
 ├── templates/
 │   ├── index.html       채팅 화면 (반응형 + PWA)
+│   ├── notes.html       메모 화면 (2단 / 모바일 1단)
 │   ├── login.html       로그인
 │   ├── setup.html       최초 관리자 생성
-│   ├── admin.html       관리자 (Dashboard / Users / Claude / System)
+│   ├── admin.html       관리자 (Dashboard / Users / Claude / System / Storage)
 │   └── error.html       403 / 404 등
 ├── static/
 │   ├── shared.css       로그인·관리자 공용 스타일
@@ -68,8 +87,13 @@ claude-web/
 └── data/                자동 생성
     ├── chat.db          SQLite (WAL)
     ├── backups/         마이그레이션 자동 백업
-    └── uploads/project_<pid>/session_<sid>/<uuid>.png
+    ├── uploads/project_<pid>/session_<sid>/<uuid>.png      채팅 첨부
+    └── notes/user_<uid>/note_<nid>/<uuid>.<ext>            메모 첨부
 ```
+
+첨부파일은 DB 에 BLOB 으로 넣지 않는다. 디스크에 두고 DB 에는 메타데이터만
+저장하며, 경로는 각 루트(`UPLOAD_DIR` / `NOTES_DIR`) 기준 **상대경로**로 적는다.
+그래서 DB 를 다른 서버로 옮겨도 첨부가 그대로 열린다.
 
 ## 배포와 Claude 설정의 분리
 

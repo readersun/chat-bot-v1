@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>메모 · Claude Web</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#202126" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+/* =========================================================================
+   메모 화면
+   데스크톱 : [목록 | 내용] 2단
+   모바일   : 1단. 목록 -> 선택 -> 보기/수정 흐름으로 전환한다.
+              (2단을 억지로 유지하면 좁은 화면에서 양쪽 다 못 쓰게 된다)
+   ========================================================================= */
+html, body { height: 100%; }
+body { overflow: hidden; }
+
+#wrap {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  height: calc(var(--app-h) - var(--header-h) - var(--sa-top));
+}
+
+/* ---------------------------------------------------------------- 목록 */
+#list-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel2);
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 8px;
+}
+.pane-head h1 { margin: 0; font-size: 15px; font-weight: 700; }
+.pane-head .spacer { flex: 1; }
+
+.pane-tools { padding: 0 12px 10px; display: grid; gap: 8px; }
+
+.chips { display: flex; gap: 6px; }
+.chip {
+  flex: 1;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+
+#search {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+#search:focus { outline: none; border-color: var(--accent); }
+
+#list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 16px; }
+
+.item {
+  width: 100%;
+  display: block;
+  text-align: left;
+  padding: 10px;
+  margin-bottom: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.item:hover { background: var(--panel); }
+.item.active { background: var(--panel); border-color: var(--accent); }
+
+.item .line1 { display: flex; align-items: center; gap: 6px; }
+.item .vis { flex: none; font-size: 13px; }
+.item .name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.item .clip { flex: none; font-size: 12px; color: var(--muted); }
+.item .line2 {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.empty { padding: 24px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+
+/* ---------------------------------------------------------------- 본문 */
+#view-pane { min-width: 0; overflow-y: auto; padding: 18px 20px 40px; }
+
+#back-btn { display: none; }
+
+.note-head { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.note-head h2 {
+  margin: 0;
+  flex: 1;
+  min-width: 200px;
+  font-size: 20px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.note-meta { margin: 6px 0 16px; font-size: 13px; color: var(--muted); }
+
+/* 줄바꿈이 그대로 보여야 한다. rich text editor 는 쓰지 않는다. */
+.note-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.7;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.note-body.blank { color: var(--muted); }
+
+/* ------------------------------------------------------------ 첨부파일 */
+.att-list { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+
+.att {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.att img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: none;
+  background: var(--code-bg);
+}
+.att .ico {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--code-bg);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.att .info { min-width: 0; }
+.att .fname {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+}
+.att .fsize { font-size: 12px; color: var(--muted); }
+.att .del {
+  flex: none;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ 폼 */
+.form-field { margin-bottom: 14px; }
+.form-field > label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.form-field input[type="text"], .form-field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+.form-field textarea { min-height: 260px; resize: vertical; line-height: 1.7; }
+.form-field input[type="text"]:focus, .form-field textarea:focus {
+  outline: none; border-color: var(--accent);
+}
+
+.radios { display: flex; gap: 16px; flex-wrap: wrap; }
+.radios label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.radios input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+.picked { margin-top: 8px; font-size: 13px; color: var(--muted); }
+.picked div { overflow-wrap: anywhere; }
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.form-actions .spacer { flex: 1; }
+
+/* ------------------------------------------------------------- 모바일 */
+@media (max-width: 860px) {
+  #wrap { grid-template-columns: minmax(0, 1fr); }
+  #list-pane { border-right: 0; }
+  #view-pane { display: none; padding: 16px 14px 40px; }
+
+  /* 상세를 보는 중에는 목록을 감추고 본문만 보여준다 */
+  body.detail #list-pane { display: none; }
+  body.detail #view-pane { display: block; }
+
+  #back-btn { display: inline-flex; }
+  .att .fname { max-width: 150px; }
+  .form-field textarea { min-height: 200px; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <span class="brand">메모</span>
+  <span class="spacer"></span>
+  <a class="btn sm" href="/" style="text-decoration:none;">채팅</a>
+  {% if is_admin %}<a class="btn sm" href="/admin" style="text-decoration:none;">관리자</a>{% endif %}
+  <a class="btn sm" href="/logout" style="text-decoration:none;">로그아웃</a>
+</header>
+
+<div id="alerts" role="status" aria-live="polite"></div>
+
+<div id="wrap">
+  <aside id="list-pane">
+    <div class="pane-head">
+      <h1>메모</h1>
+      <span class="spacer"></span>
+      <button class="btn primary sm" type="button" id="new-btn">+ 새 메모</button>
+    </div>
+    <div class="pane-tools">
+      <div class="chips" role="group" aria-label="메모 필터">
+        <button type="button" class="chip active" data-scope="all">전체</button>
+        <button type="button" class="chip" data-scope="mine">내 메모</button>
+        <button type="button" class="chip" data-scope="shared">공유 메모</button>
+      </div>
+      <input type="search" id="search" placeholder="제목 검색..."
+             aria-label="메모 제목 검색" autocomplete="off">
+    </div>
+    <div id="list"></div>
+  </aside>
+
+  <main id="view-pane" aria-live="polite"></main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var ME = {{ me|tojson }};
+  var CSRF = {{ csrf|tojson }};
+  var LIMITS = {{ limits|tojson }};
+
+  var ICON_PRIVATE = "\u{1F512}";   /* 🔒 */
+  var ICON_PUBLIC = "\u{1F310}";    /* 🌐 */
+
+  var listBox = document.getElementById("list");
+  var viewBox = document.getElementById("view-pane");
+  var alerts = document.getElementById("alerts");
+  var searchInput = document.getElementById("search");
+
+  var state = { scope: "all", q: "", notes: [], current: null, editing: false };
+
+  /* --------------------------------------------------------- DOM 헬퍼
+     textContent 만 쓴다. innerHTML 은 어디에서도 쓰지 않는다.
+     (메모 제목/내용/파일명이 그대로 HTML 로 해석되면 안 된다) */
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (k) {
+      if (k === "class") { n.className = props[k]; }
+      else if (k === "text") { n.textContent = props[k]; }
+      else if (k.slice(0, 2) === "on") { n[k] = props[k]; }
+      else if (props[k] !== null && props[k] !== undefined) { n.setAttribute(k, props[k]); }
+    });
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined) { return; }
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+
+  function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
+
+  function bytes(n) {
+    if (!n && n !== 0) { return "-"; }
+    if (n < 1024) { return n + " B"; }
+    if (n < 1048576) { return (n / 1024).toFixed(1) + " KB"; }
+    return (n / 1048576).toFixed(1) + " MB";
+  }
+
+  function notify(msg, kind) {
+    var box = el("div", { class: "alert " + (kind || "ok"), role: "alert", text: msg });
+    alerts.appendChild(box);
+    setTimeout(function () {
+      if (box.parentNode) { box.parentNode.removeChild(box); }
+    }, 6000);
+  }
+
+  /* ------------------------------------------------------------- 모달 */
+  function confirmBox(opts) {
+    return new Promise(function (resolve) {
+      var ov = el("div", { class: "overlay" });
+      var box = el("div", { class: "modal", role: "dialog", "aria-modal": "true" });
+      box.appendChild(el("h3", { text: opts.title }));
+      if (opts.message) { box.appendChild(el("p", { text: opts.message })); }
+
+      var cancel = el("button", { class: "btn", type: "button", text: "취소" });
+      var ok = el("button", {
+        class: "btn " + (opts.danger ? "danger" : "primary"),
+        type: "button", text: opts.confirmText || "확인"
+      });
+      box.appendChild(el("div", { class: "actions" }, [cancel, ok]));
+
+      function done(v) {
+        document.removeEventListener("keydown", onKey);
+        if (ov.parentNode) { ov.parentNode.removeChild(ov); }
+        resolve(v);
+      }
+      function onKey(e) { if (e.key === "Escape") { done(false); } }
+      cancel.onclick = function () { done(false); };
+      ok.onclick = function () { done(true); };
+      ov.onclick = function (e) { if (e.target === ov) { done(false); } };
+
+      document.addEventListener("keydown", onKey);
+      ov.appendChild(box);
+      document.body.appendChild(ov);
+      ok.focus();
+    });
+  }
+
+  /* --------------------------------------------------------------- API */
+  function api(method, url, body) {
+    var opt = { method: method, headers: { "X-CSRF-Token": CSRF },
+                credentials: "same-origin" };
+    if (body instanceof FormData) {
+      opt.body = body;                      /* Content-Type 은 브라우저가 붙인다 */
+    } else if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    return fetch(url, opt).then(function (res) {
+      if (res.status === 413) {
+        throw new Error("업로드 용량이 서버 허용치를 넘었습니다. (파일당 최대 "
+                        + LIMITS.max_note_attachment_mb + "MB)");
+      }
+      return res.json().catch(function () {
+        return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+      }).then(function (data) {
+        if (!res.ok) { throw new Error((data && data.error) || ("HTTP " + res.status)); }
+        return data;
+      });
+    });
+  }
+
+  /* -------------------------------------------------------- 모바일 전환 */
+  function showDetail(on) {
+    if (on) { document.body.classList.add("detail"); }
+    else { document.body.classList.remove("detail"); }
+  }
+
+  function backButton() {
+    return el("button", {
+      class: "btn sm", type: "button", id: "back-btn", text: "← 목록",
+      onclick: function () { showDetail(false); }
+    });
+  }
+
+  /* ---------------------------------------------------------- 목록 렌더 */
+  function loadList(keepCurrent) {
+    var url = "/api/notes?scope=" + encodeURIComponent(state.scope);
+    if (state.q) { url += "&q=" + encodeURIComponent(state.q); }
+    return api("GET", url).then(function (d) {
+      state.notes = d.notes || [];
+      renderList();
+      if (!keepCurrent) { return null; }
+      /* 목록을 새로 불러와도 열려 있던 메모는 그대로 유지한다 */
+      return null;
+    });
+  }
+
+  function renderList() {
+    clear(listBox);
+    if (!state.notes.length) {
+      listBox.appendChild(el("div", { class: "empty", text:
+        state.q ? "검색 결과가 없습니다." :
+        state.scope === "shared" ? "공유된 메모가 없습니다."
+                                 : "메모가 없습니다. [+ 새 메모] 를 눌러 시작하세요." }));
+      return;
+    }
+    state.notes.forEach(function (n) {
+      var isPub = n.visibility === "public";
+      var sub = [];
+      if (!n.is_owner && n.owner_name) { sub.push(n.owner_name); }
+      else if (!n.is_owner) { sub.push("(소유자 없음)"); }
+      if (n.preview) { sub.push(n.preview); }
+
+      var btn = el("button", {
+        class: "item" + (state.current && state.current.id === n.id ? " active" : ""),
+        type: "button",
+        onclick: function () { open(n.id); }
+      }, [
+        el("div", { class: "line1" }, [
+          el("span", { class: "vis", title: isPub ? "전체 공유" : "나만 보기",
+                       text: isPub ? ICON_PUBLIC : ICON_PRIVATE }),
+          el("span", { class: "name", text: n.title || "(제목 없음)" }),
+          n.attachment_count
+            ? el("span", { class: "clip", text: "\u{1F4CE}" + n.attachment_count })
+            : null
+        ]),
+        el("div", { class: "line2", text: sub.join(" · ") || n.updated_at })
+      ]);
+      listBox.appendChild(btn);
+    });
+  }
+
+  /* ---------------------------------------------------------- 보기 화면 */
+  function open(id) {
+    return api("GET", "/api/notes/" + id).then(function (d) {
+      state.current = d.note;
+      state.editing = false;
+      renderView();
+      renderList();
+      showDetail(true);
+    }).catch(function (e) {
+      notify(e.message, "error");
+      state.current = null;
+      loadList();
+    });
+  }
+
+  function attachmentNode(a, canDelete) {
+    var isImg = a.mime_type.indexOf("image/") === 0;
+    var url = "/api/note-attachments/" + a.id;
+    var thumb = isImg
+      ? el("img", { src: url, alt: a.original_name, loading: "lazy" })
+      : el("span", { class: "ico", text: a.mime_type === "application/pdf" ? "PDF" : "TXT" });
+
+    var link = el("a", { class: "fname", href: url, target: "_blank",
+                         rel: "noopener", text: a.original_name });
+
+    var kids = [
+      thumb,
+      el("div", { class: "info" }, [link, el("div", { class: "fsize", text: bytes(a.file_size) })])
+    ];
+    if (canDelete) {
+      kids.push(el("button", {
+        class: "del", type: "button", text: "삭제",
+        onclick: function () { removeAttachment(a); }
+      }));
+    }
+    return el("div", { class: "att" }, kids);
+  }
+
+  function renderView() {
+    var n = state.current;
+    clear(viewBox);
+    if (!n) {
+      viewBox.appendChild(el("div", { class: "empty",
+        text: "왼쪽에서 메모를 선택하거나 새 메모를 만드세요." }));
+      return;
+    }
+
+    var isPub = n.visibility === "public";
+    var head = el("div", { class: "note-head" }, [
+      backButton(),
+      el("h2", { text: n.title || "(제목 없음)" }),
+      el("span", { class: "badge " + (isPub ? "warn" : "ok"),
+                   text: isPub ? ICON_PUBLIC + " 전체 공유" : ICON_PRIVATE + " 나만 보기" })
+    ]);
+    viewBox.appendChild(head);
+
+    var who = n.is_owner ? "나" : (n.owner_name || "(소유자 없음)");
+    viewBox.appendChild(el("div", { class: "note-meta",
+      text: "작성자 " + who + " · 수정 " + n.updated_at + " · 작성 " + n.created_at }));
+
+    if (n.can_manage) {
+      viewBox.appendChild(el("div", { class: "row", style: "margin-bottom:14px" }, [
+        el("button", { class: "btn sm", type: "button", text: "수정",
+          onclick: function () { state.editing = true; renderForm(n); } }),
+        el("button", { class: "btn sm danger", type: "button", text: "삭제",
+          onclick: function () { removeNote(n); } })
+      ]));
+    } else {
+      viewBox.appendChild(el("div", { class: "muted", style: "margin-bottom:14px;font-size:13px",
+        text: "공유된 메모입니다. 읽기만 가능합니다." }));
+    }
+
+    viewBox.appendChild(el("div", {
+      class: "note-body" + (n.content ? "" : " blank"),
+      text: n.content || "(내용 없음)"
+    }));
+
+    if (n.attachments && n.attachments.length) {
+      viewBox.appendChild(el("h3", { style: "margin:18px 0 0;font-size:14px",
+                                     text: "첨부파일 (" + n.attachments.length + ")" }));
+      viewBox.appendChild(el("div", { class: "att-list" },
+        n.attachments.map(function (a) { return attachmentNode(a, false); })));
+    }
+  }
+
+  /* -------------------------------------------------------- 작성/수정 폼 */
+  function renderForm(n) {
+    var isNew = !n;
+    clear(viewBox);
+    showDetail(true);
+
+    var title = el("input", { type: "text", maxlength: LIMITS.max_title_chars,
+                              value: isNew ? "" : (n.title || ""),
+                              placeholder: "예: 서버 점검 내용" });
+    var content = el("textarea", { placeholder: "내용을 입력하세요. 줄바꿈은 그대로 저장됩니다.",
+                                   maxlength: LIMITS.max_content_chars });
+    content.value = isNew ? "" : (n.content || "");
+
+    var vis = isNew ? "private" : n.visibility;
+    var rPrivate = el("input", { type: "radio", name: "vis", value: "private",
+                                 id: "vis-private" });
+    var rPublic = el("input", { type: "radio", name: "vis", value: "public",
+                                id: "vis-public" });
+    if (vis === "public") { rPublic.checked = true; } else { rPrivate.checked = true; }
+
+    var fileInput = el("input", {
+      type: "file", multiple: "multiple",
+      accept: ".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain"
+    });
+    var picked = el("div", { class: "picked" });
+
+    fileInput.onchange = function () {
+      clear(picked);
+      var files = Array.prototype.slice.call(fileInput.files || []);
+      var over = files.filter(function (f) {
+        return f.size > LIMITS.max_note_attachment_mb * 1048576;
+      });
+      if (files.length > LIMITS.max_note_attachments) {
+        picked.appendChild(el("div", { class: "alert warn", text:
+          "한 번에 최대 " + LIMITS.max_note_attachments + "개까지 올릴 수 있습니다. "
+          + "(선택 " + files.length + "개)" }));
+      }
+      /* 서버도 검사하지만, 올리기 전에 알려주는 게 낫다. (전송 후 413 을 받으면
+         기다린 시간이 아깝고 회선도 낭비된다) */
+      if (over.length) {
+        picked.appendChild(el("div", { class: "alert warn", text:
+          "다음 파일은 " + LIMITS.max_note_attachment_mb + "MB 를 넘어 저장되지 않습니다: "
+          + over.map(function (f) { return f.name; }).join(", ") }));
+      }
+      files.forEach(function (f) {
+        picked.appendChild(el("div", { text: f.name + " (" + bytes(f.size) + ")" }));
+      });
+    };
+
+    viewBox.appendChild(el("div", { class: "note-head" }, [
+      backButton(),
+      el("h2", { text: isNew ? "새 메모" : "메모 수정" })
+    ]));
+
+    viewBox.appendChild(el("div", { class: "form-field" },
+      [el("label", { for: "note-title", text: "제목" }), title]));
+    title.id = "note-title";
+
+    viewBox.appendChild(el("div", { class: "form-field" },
+      [el("label", { for: "note-content", text: "내용" }), content]));
+    content.id = "note-content";
+
+    viewBox.appendChild(el("div", { class: "form-field" }, [
+      el("label", { text: "공개 범위" }),
+      el("div", { class: "radios" }, [
+        el("label", { for: "vis-private" },
+          [rPrivate, ICON_PRIVATE + " 나만 보기"]),
+        el("label", { for: "vis-public" },
+          [rPublic, ICON_PUBLIC + " 전체 공유"])
+      ])
+    ]));
+
+    viewBox.appendChild(el("div", { class: "form-field" }, [
+      el("label", { text: "첨부파일 추가" }),
+      fileInput,
+      el("div", { class: "muted", style: "font-size:12px;margin-top:6px", text:
+        "최대 " + LIMITS.max_note_attachments + "개, 파일당 "
+        + LIMITS.max_note_attachment_mb + "MB · "
+        + LIMITS.allowed_ext.join(", ") }),
+      picked
+    ]));
+
+    /* 수정일 때는 기존 첨부를 여기서 지울 수 있다 */
+    if (!isNew && n.attachments && n.attachments.length) {
+      viewBox.appendChild(el("div", { class: "form-field" }, [
+        el("label", { text: "기존 첨부파일" }),
+        el("div", { class: "att-list" },
+          n.attachments.map(function (a) { return attachmentNode(a, true); }))
+      ]));
+    }
+
+    var save = el("button", { class: "btn primary", type: "button",
+                              text: isNew ? "저장" : "변경 저장" });
+    var cancel = el("button", { class: "btn", type: "button", text: "취소",
+      onclick: function () {
+        state.editing = false;
+        if (isNew) { state.current = null; renderView(); showDetail(false); }
+        else { renderView(); }
+      } });
+
+    save.onclick = function () {
+      var t = title.value.trim();
+      if (!t) { notify("제목을 입력해 주세요.", "error"); title.focus(); return; }
+
+      var files = Array.prototype.slice.call(fileInput.files || []);
+      if (files.length > LIMITS.max_note_attachments) {
+        notify("첨부파일은 한 번에 최대 " + LIMITS.max_note_attachments + "개까지입니다.",
+               "error");
+        return;
+      }
+      var tooBig = files.filter(function (f) {
+        return f.size > LIMITS.max_note_attachment_mb * 1048576;
+      });
+      if (tooBig.length) {
+        notify("파일당 최대 " + LIMITS.max_note_attachment_mb + "MB 입니다: "
+               + tooBig.map(function (f) { return f.name; }).join(", "), "error");
+        return;
+      }
+
+      var visValue = rPublic.checked ? "public" : "private";
+      var body;
+      if (files.length) {
+        body = new FormData();
+        body.append("title", t);
+        body.append("content", content.value);
+        body.append("visibility", visValue);
+        files.forEach(function (f) { body.append("files", f); });
+      } else {
+        body = { title: t, content: content.value, visibility: visValue };
+      }
+
+      save.disabled = true;
+      cancel.disabled = true;
+      var req = isNew ? api("POST", "/api/notes", body)
+                      : api("PATCH", "/api/notes/" + n.id, body);
+      req.then(function (d) {
+        state.current = d.note;
+        state.editing = false;
+        notify(isNew ? "메모를 저장했습니다." : "메모를 수정했습니다.");
+        renderView();
+        return loadList(true);
+      }).catch(function (e) {
+        notify(e.message, "error");
+      }).then(function () {
+        save.disabled = false;
+        cancel.disabled = false;
+      });
+    };
+
+    viewBox.appendChild(el("div", { class: "form-actions" }, [save, cancel]));
+    title.focus();
+  }
+
+  /* ------------------------------------------------------------ 삭제 */
+  function removeNote(n) {
+    confirmBox({
+      title: "메모를 삭제할까요?",
+      message: "\"" + (n.title || "(제목 없음)") + "\" 과 첨부파일이 함께 삭제됩니다. "
+               + "되돌릴 수 없습니다.",
+      confirmText: "삭제", danger: true
+    }).then(function (yes) {
+      if (!yes) { return null; }
+      return api("DELETE", "/api/notes/" + n.id).then(function () {
+        notify("메모를 삭제했습니다.");
+        state.current = null;
+        state.editing = false;
+        renderView();
+        showDetail(false);
+        return loadList();
+      }).catch(function (e) { notify(e.message, "error"); });
+    });
+  }
+
+  function removeAttachment(a) {
+    confirmBox({
+      title: "첨부파일을 삭제할까요?",
+      message: a.original_name + " 을 삭제합니다. 되돌릴 수 없습니다.",
+      confirmText: "삭제", danger: true
+    }).then(function (yes) {
+      if (!yes) { return null; }
+      return api("DELETE", "/api/note-attachments/" + a.id).then(function () {
+        notify("첨부파일을 삭제했습니다.");
+        return api("GET", "/api/notes/" + state.current.id).then(function (d) {
+          state.current = d.note;
+          if (state.editing) { renderForm(d.note); } else { renderView(); }
+          return loadList(true);
+        });
+      }).catch(function (e) { notify(e.message, "error"); });
+    });
+  }
+
+  /* ------------------------------------------------------------ 이벤트 */
+  document.getElementById("new-btn").onclick = function () {
+    state.current = null;
+    state.editing = true;
+    renderList();
+    renderForm(null);
+  };
+
+  Array.prototype.forEach.call(document.querySelectorAll(".chip"), function (c) {
+    c.onclick = function () {
+      Array.prototype.forEach.call(document.querySelectorAll(".chip"), function (o) {
+        o.classList.remove("active");
+      });
+      c.classList.add("active");
+      state.scope = c.dataset.scope;
+      loadList(true).catch(function (e) { notify(e.message, "error"); });
+    };
+  });
+
+  var searchTimer = null;
+  searchInput.oninput = function () {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      state.q = searchInput.value.trim();
+      loadList(true).catch(function (e) { notify(e.message, "error"); });
+    }, 250);
+  };
+
+  /* -------------------------------------------------------------- 시작 */
+  renderView();
+  loadList().catch(function (e) {
+    clear(listBox);
+    listBox.appendChild(el("div", { class: "alert error", text: e.message }));
+  });
+})();
+</script>
+</body>
+</html>

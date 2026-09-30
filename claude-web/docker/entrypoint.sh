@@ -59,7 +59,7 @@ if [ "$(id -u)" = "0" ]; then
     # DB / 업로드 / Claude working dir / 마이그레이션 백업.
     # .env 의 DATABASE_PATH, UPLOAD_DIR, BACKUP_DIR, CLAUDE_WORKDIR 이 여기를 본다.
     # workspace 는 관리자 화면이 "존재하는 디렉터리" 인지 검사하므로 미리 만든다.
-    for d in "$DATA_ROOT" "$DATA_ROOT/uploads" "$DATA_ROOT/workspace" "$DATA_ROOT/backups"; do
+    for d in "$DATA_ROOT" "$DATA_ROOT/uploads" "$DATA_ROOT/notes" "$DATA_ROOT/workspace" "$DATA_ROOT/backups"; do
         if [ ! -d "$d" ]; then
             log "mkdir $d"
             mkdir -p "$d"
