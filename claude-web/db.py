@@ -45,7 +45,7 @@ from flask import g
 
 from config import BACKUP_DIR, DATABASE_PATH, UPLOAD_DIR
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -165,6 +165,29 @@ CREATE TABLE IF NOT EXISTS note_attachments (
     FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
 );
 
+-- 메모 댓글 (v5)
+-- 대댓글은 parent_id 로 표현한다. 깊이는 한 단계로 제한한다. 즉 댓글에는
+-- 답글을 달 수 있지만 답글에는 달 수 없다. (서버에서 검사한다)
+-- 끝없이 들여쓰기가 깊어지면 좁은 화면에서 글을 읽을 수 없고, 권한과 삭제
+-- 규칙도 따라서 복잡해진다. 사내 메모에 그만한 깊이가 필요하지 않다.
+--
+-- user_id 를 ON DELETE SET NULL 로 둔 이유는 notes/sessions 와 같다.
+-- 관리자가 사용자를 지울 때 그 사람이 쓴 글이 조용히 사라지지 않게 한다.
+-- parent_id 는 CASCADE 다. 부모 댓글을 지우면 그 아래 답글도 함께 사라지는
+-- 것이 자연스럽다. (답글만 남아 맥락 없이 떠 있으면 읽을 수 없다)
+CREATE TABLE IF NOT EXISTS note_comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_id    INTEGER NOT NULL,
+    parent_id  INTEGER,
+    user_id    INTEGER,
+    content    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_id) REFERENCES note_comments(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER,
@@ -192,6 +215,8 @@ CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments(session_id);
 CREATE INDEX IF NOT EXISTS idx_notes_owner        ON notes(owner_id);
 CREATE INDEX IF NOT EXISTS idx_notes_updated      ON notes(updated_at);
 CREATE INDEX IF NOT EXISTS idx_note_att_note      ON note_attachments(note_id);
+CREATE INDEX IF NOT EXISTS idx_note_cmt_note      ON note_comments(note_id, id);
+CREATE INDEX IF NOT EXISTS idx_note_cmt_parent    ON note_comments(parent_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created      ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_login_attempts     ON login_attempts(created_at);
 """
@@ -343,7 +368,7 @@ def pending_migrations(conn):
     """적용해야 할 변경 목록을 사람이 읽을 수 있는 문자열로 돌려준다."""
     todo = []
     for t in ("users", "settings", "session_members", "audit_logs", "login_attempts",
-              "notes", "note_attachments"):
+              "notes", "note_attachments", "note_comments"):
         if not table_exists(conn, t):
             todo.append("CREATE TABLE %s" % t)
     if table_exists(conn, "sessions"):

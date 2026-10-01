@@ -1,6 +1,6 @@
 {
-  "name": "Claude Web Chat",
-  "short_name": "Claude Web",
+  "name": "chat-bot",
+  "short_name": "chat-bot",
   "description": "로컬 Claude Code CLI 를 사용하는 프로젝트/세션 기반 웹 챗봇",
   "start_url": "/",
   "scope": "/",

@@ -20,6 +20,7 @@ admin
 
 import os
 import shutil
+import sys
 
 from flask import Blueprint, abort, jsonify, render_template, request
 
@@ -35,6 +36,24 @@ from db import audit, get_db, row_to_dict, ts
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 api = Blueprint("admin_api", __name__, url_prefix="/api/admin")
+
+def _app_module():
+    """이미 올라와 있는 app 모듈을 돌려준다.
+
+    `from app import ...` 를 쓰면 안 된다. `python app.py` 로 띄웠을 때는 그
+    모듈 이름이 __main__ 이라서 import 가 app.py 를 처음부터 다시 실행하고,
+    startup() 이 또 돌면서 열려 있는 DB 를 건드려 "database is locked" 로
+    죽는다. gunicorn(app:app) 으로 띄우면 이름이 app 이라 드러나지 않는다.
+    """
+    mod = sys.modules.get("app")
+    if mod is None:
+        main = sys.modules.get("__main__")
+        if main is not None and hasattr(main, "sniff_mime"):
+            mod = main
+    if mod is None:
+        raise RuntimeError("app 모듈이 아직 올라오지 않았습니다.")
+    return mod
+
 
 TABS = ("dashboard", "users", "claude", "system", "storage")
 
@@ -439,7 +458,7 @@ def admin_delete_session(sid):
     row = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
     if row is None:
         abort(404, "세션을 찾을 수 없습니다.")
-    from app import remove_tree  # 순환 import 방지를 위해 지연 import
+    remove_tree = _app_module().remove_tree
 
     db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
     audit(db, current_user()["id"], "session_deleted", "session", sid,

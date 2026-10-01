@@ -96,13 +96,54 @@ docker compose exec -T app sh -c '
 ' sh "$OUT" "$NOTES_DIR" "$STAMP"
 
 # --- 3) .env (SECRET_KEY 포함 -> 0600) --------------------------------------
-docker compose exec -T app sh -c '
-    set -e
-    out="$1"; stamp="$2"
-    cp /app/.env "$out/env-$stamp.bak"
-    chmod 600 "$out/env-$stamp.bak"
-    echo "설정 백업  : $out/env-$stamp.bak (0600)"
-' sh "$OUT" "$STAMP"
+#
+# 컨테이너는 uid 1000 으로 돌기 때문에 .env 가 root:root 0600 이면 읽지 못한다.
+# 예전에는 그때 cp 가 실패하면서 set -e 에 걸려 **백업 전체가 실패**했고,
+# 이미 끝난 DB/첨부 백업까지 함께 버려진 뒤 docker-update.sh 가 배포를 멈췄다.
+#
+# .env 는 이 스크립트가 만들거나 고치는 파일이 아니다. 복사에 실패해도 원본은
+# 그대로 있고, 업데이트(git pull + restart)가 .env 를 건드리지도 않는다.
+# 그러므로 여기서 멈출 이유가 없다. 경고만 남기고 넘어간다.
+#
+# 대신 두 번 시도한다.
+#   1) 컨테이너 안에서 (평소 경로)
+#   2) host 에서 직접 (이 스크립트는 보통 root 로 돈다)
+ENV_OK=0
+
+if docker compose exec -T app sh -c '
+        set -e
+        out="$1"; stamp="$2"
+        cp /app/.env "$out/env-$stamp.bak"
+        chmod 600 "$out/env-$stamp.bak"
+        echo "설정 백업  : $out/env-$stamp.bak (0600)"
+    ' sh "$OUT" "$STAMP" 2>/dev/null; then
+    ENV_OK=1
+else
+    # host 쪽 경로를 계산한다. 컨테이너의 /var/lib/claude-web 이 host 의
+    # HOST_DATA_DIR 에 bind mount 되어 있다. (compose.yml 의 volumes)
+    HOST_DATA_DIR="$(grep -E '^HOST_DATA_DIR=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    HOST_DATA_DIR="${HOST_DATA_DIR:-/var/lib/claude-web}"
+    HOST_OUT="${OUT/#\/var\/lib\/claude-web/$HOST_DATA_DIR}"
+
+    if [ -r .env ] && [ -d "$HOST_OUT" ]; then
+        if cp .env "$HOST_OUT/env-$STAMP.bak" 2>/dev/null; then
+            chmod 600 "$HOST_OUT/env-$STAMP.bak"
+            echo "설정 백업  : $HOST_OUT/env-$STAMP.bak (0600, host 에서 복사)"
+            ENV_OK=1
+        fi
+    fi
+fi
+
+if [ "$ENV_OK" = "0" ]; then
+    echo
+    echo "!! .env 는 이번 백업에 포함되지 않았습니다. (DB 와 첨부파일은 정상입니다)"
+    echo "   컨테이너가 uid 1000 으로 돌아서 root:root 0600 인 .env 를 못 읽습니다."
+    echo "   다음을 실행하면 다음 백업부터 함께 담깁니다:"
+    echo "       chown root:1000 .env && chmod 640 .env"
+    echo "   .env 에는 SECRET_KEY 가 들어 있습니다. 잃으면 전원 로그아웃되고"
+    echo "   관리자 화면에 저장한 Claude API Key 를 복호화할 수 없습니다."
+    echo
+fi
 
 # --- 4) 오래된 백업 정리 ----------------------------------------------------
 docker compose exec -T app sh -c '

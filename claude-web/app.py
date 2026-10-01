@@ -4,7 +4,7 @@
 claude-web
 ==========
 
-사내 공용 Claude Web Portal.
+사내 공용 chat-bot 포털.
 
     브라우저 -> 로그인 -> Flask -> Claude Provider -> Claude -> 브라우저
 

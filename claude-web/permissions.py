@@ -182,6 +182,69 @@ def require_manage_note(user, note):
 
 
 # ---------------------------------------------------------------------------
+# 메모 댓글 (note_comments)
+#
+# 댓글은 "그 메모를 볼 수 있는 사람" 의 것이다. 메모 본문의 수정 권한과는
+# 다르게 본다. 공개 메모는 읽으라고 공개한 것이고, 읽은 사람이 한 마디
+# 남기는 것이 댓글의 쓸모이기 때문이다.
+#
+#                     댓글 읽기   댓글 쓰기   내 댓글 수정   댓글 삭제
+#   private  owner        O           O            O            O
+#            그 외        X           X            -            -
+#   public   owner        O           O            O         O (남의 것도)
+#            로그인자     O           O            O         O (자기 것만)
+#
+# 삭제를 메모 주인에게도 허용하는 이유: 자기 메모 아래 달린 글을 정리할 수
+# 있어야 한다. 반대로 **수정은 작성자만** 한다. 남의 말을 고쳐 쓰는 일은
+# 허용하지 않는다.
+#
+# admin 은 여기서도 특별 취급하지 않는다. private 메모의 댓글은 관리자에게도
+# 보이지 않는다. (메모 본문과 같은 원칙)
+# ---------------------------------------------------------------------------
+def is_comment_author(user, comment):
+    if not user or comment is None:
+        return False
+    uid = comment["user_id"]
+    return uid is not None and uid == user["id"]
+
+
+def can_write_comment(user, note):
+    """댓글을 달 수 있는가. 그 메모를 볼 수 있으면 된다."""
+    return can_view_note(user, note)
+
+
+def can_edit_comment(user, comment):
+    """내용을 고치는 것은 쓴 사람만."""
+    return is_comment_author(user, comment)
+
+
+def can_delete_comment(user, note, comment):
+    """지우는 것은 쓴 사람 또는 메모 주인."""
+    return is_comment_author(user, comment) or is_note_owner(user, note)
+
+
+def require_write_comment(user, note):
+    if not can_view_note(user, note):
+        abort(404, "메모를 찾을 수 없습니다.")
+    if not can_write_comment(user, note):
+        abort(403, "이 메모에는 댓글을 쓸 수 없습니다.")
+
+
+def require_edit_comment(user, note, comment):
+    if not can_view_note(user, note):
+        abort(404, "메모를 찾을 수 없습니다.")
+    if not can_edit_comment(user, comment):
+        abort(403, "댓글을 쓴 사람만 고칠 수 있습니다.")
+
+
+def require_delete_comment(user, note, comment):
+    if not can_view_note(user, note):
+        abort(404, "메모를 찾을 수 없습니다.")
+    if not can_delete_comment(user, note, comment):
+        abort(403, "댓글을 쓴 사람이나 메모 작성자만 지울 수 있습니다.")
+
+
+# ---------------------------------------------------------------------------
 # 목록 조회용 SQL 조각
 # ---------------------------------------------------------------------------
 def visible_notes_clause(user, scope="all"):

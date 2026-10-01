@@ -145,6 +145,7 @@ MAX_NOTE_ATTACHMENTS = env_int("MAX_NOTE_ATTACHMENTS", 5)
 
 MAX_NOTE_TITLE_CHARS = env_int("MAX_NOTE_TITLE_CHARS", 200)
 MAX_NOTE_CONTENT_CHARS = env_int("MAX_NOTE_CONTENT_CHARS", 50000)
+MAX_NOTE_COMMENT_CHARS = env_int("MAX_NOTE_COMMENT_CHARS", 2000)
 
 # 확장자 -> 허용 MIME. 하나의 확장자가 여러 MIME 을 가질 수 있어 tuple 이다.
 # 실행 파일 / script / shell 은 넣지 않는다. 확장자만 믿지 않고 내용도 검사한다.

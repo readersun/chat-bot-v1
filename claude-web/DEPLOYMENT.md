@@ -900,7 +900,7 @@ sudo nginx -t && sudo systemctl reload nginx
 이 파일들은 모두 서비스워커의 `SHELL` 목록에 들어 있습니다.
 
 ```js
-const VERSION = "claude-web-v5";   // -> v6
+const VERSION = "chat-bot-v7";   // -> v8
 ```
 
 `activate` 에서 이전 버전 캐시를 통째로 지웁니다.

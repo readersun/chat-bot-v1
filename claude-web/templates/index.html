@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Claude Web</title>
+<title>chat-bot</title>
 <meta name="csrf-token" content="{{ csrf }}">
 <meta name="robots" content="noindex">
 
 <!-- PWA -->
 <link rel="manifest" href="/manifest.webmanifest">
-<meta name="application-name" content="Claude Web">
+<meta name="application-name" content="chat-bot">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Claude Web">
+<meta name="apple-mobile-web-app-title" content="chat-bot">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
@@ -1179,7 +1179,7 @@ body.dragging #drop-hint { display: grid; }
         <span id="session-count" class="count"></span>
       </button>
       <div class="titles">
-        <div id="chat-title">Claude Web</div>
+        <div id="chat-title">chat-bot</div>
         <div id="chat-sub"></div>
       </div>
       <button class="btn" id="install-btn" hidden>앱 설치</button>
@@ -2001,7 +2001,7 @@ body.dragging #drop-hint { display: grid; }
     title.textContent = "";
     var tname = document.createElement("span");
     tname.className = "tname";
-    tname.textContent = s ? s.name : "Claude Web";
+    tname.textContent = s ? s.name : "chat-bot";
     tname.title = s ? s.name : "";
     title.appendChild(tname);
     if (s) {

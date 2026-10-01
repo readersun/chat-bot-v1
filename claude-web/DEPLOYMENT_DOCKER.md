@@ -817,7 +817,7 @@ curl -fsS http://127.0.0.1/health
 | `static/*` | 반영됨 (매 요청 파일을 읽는다) | 반영됨 |
 
 `static/` 을 고쳤고 PWA 캐시를 무효화해야 하면 `static/sw.js` 의 `VERSION`
-문자열(`claude-web-v5`)을 올린 뒤 재시작한다.
+문자열(`chat-bot-v7`)을 올린 뒤 재시작한다.
 `shared.css` / `type.css` / `fonts/` 는 서비스워커의 `SHELL` 목록에 있어서,
 버전을 올리지 않으면 이미 방문한 브라우저에 예전 화면이 그대로 남는다.
 
@@ -885,10 +885,16 @@ docker compose run --rm --no-deps app python app.py migrate
 |---|---|
 | v2 | 로그인 / 권한 도입 (`users`, `settings`, `sessions.owner_id`, `visibility`) |
 | v3 | `attachments.file_path` 를 `UPLOAD_DIR` 기준 상대경로로 변환 |
-| **v4** | **메모 기능: `notes`, `note_attachments` 테이블 추가** |
+| v4 | 메모 기능: `notes`, `note_attachments` 테이블 추가 |
+| **v5** | **메모 댓글: `note_comments` 테이블 추가** |
 
-v4 는 **테이블을 추가만** 한다. 기존 테이블의 컬럼과 데이터를 전혀 건드리지 않아
-채팅 기능에 영향이 없다. 실제로 데이터가 들어 있는 v3 DB 로 검증했다.
+v4 와 v5 는 **테이블을 추가만** 한다. 기존 테이블의 컬럼과 데이터를 전혀 건드리지
+않아 채팅 기능에 영향이 없다. 실제로 데이터가 들어 있는 v3 DB 로 검증했다.
+
+v5 의 `note_comments` 는 `notes` 를 참조하는 새 테이블 하나뿐이다. 되돌려야 하면
+코드를 이전 커밋으로 내리기만 하면 된다. 테이블이 남아 있어도 예전 코드는 그
+테이블을 쳐다보지 않는다. (`PRAGMA user_version` 만 5 로 남는데, 이는 다음
+기동에서 다시 5 로 맞춰지므로 문제가 되지 않는다)
 
 ```bash
 # 배포 전에 현재 버전 확인

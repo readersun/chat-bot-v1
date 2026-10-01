@@ -1,4 +1,4 @@
-/* claude-web service worker
+/* chat-bot service worker
  *
  * 로그인이 도입되면서 캐시 정책이 바뀌었다.
  *
@@ -18,7 +18,7 @@
  * VERSION 을 올리면 activate 에서 이전 캐시를 통째로 지운다.
  * v1 이 캐시해 둔 "/" 응답도 이때 함께 제거된다.
  */
-const VERSION = "claude-web-v6";
+const VERSION = "chat-bot-v7";
 
 const SHELL = [
   "/manifest.webmanifest",

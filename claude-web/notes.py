@@ -41,6 +41,7 @@ DB(note_attachments.file_path)에는 **NOTES_DIR 기준 상대경로**만 넣는
 """
 
 import os
+import sys
 import uuid
 
 from flask import (
@@ -53,6 +54,24 @@ import permissions
 from db import audit, get_db, row_to_dict, ts
 
 bp = Blueprint("notes", __name__)
+
+def _app_module():
+    """이미 올라와 있는 app 모듈을 돌려준다.
+
+    `from app import ...` 를 쓰면 안 된다. `python app.py` 로 띄웠을 때는 그
+    모듈 이름이 __main__ 이라서 import 가 app.py 를 처음부터 다시 실행하고,
+    startup() 이 또 돌면서 열려 있는 DB 를 건드려 "database is locked" 로
+    죽는다. gunicorn(app:app) 으로 띄우면 이름이 app 이라 드러나지 않는다.
+    """
+    mod = sys.modules.get("app")
+    if mod is None:
+        main = sys.modules.get("__main__")
+        if main is not None and hasattr(main, "sniff_mime"):
+            mod = main
+    if mod is None:
+        raise RuntimeError("app 모듈이 아직 올라오지 않았습니다.")
+    return mod
+
 api = Blueprint("notes_api", __name__, url_prefix="/api")
 
 NOTES_DIR = config.NOTES_DIR
@@ -122,9 +141,7 @@ def sniff_note_file(head, ext):
     파일 내용으로 MIME 을 판별한다. 확장자와 맞지 않으면 None.
     이미지 판별은 채팅과 같은 함수를 쓴다. (app.sniff_mime)
     """
-    # 지연 import : app.py 가 이 모듈을 import 하므로 최상단에서 하면 순환이 된다.
-    # (admin.py 가 remove_tree 를 가져오는 방식과 같다)
-    from app import sniff_mime
+    sniff_mime = _app_module().sniff_mime
 
     if ext == "pdf":
         return "application/pdf" if head.startswith(b"%PDF-") else None
@@ -237,6 +254,7 @@ def limits():
         "max_note_attachments": config.MAX_NOTE_ATTACHMENTS,
         "max_title_chars": config.MAX_NOTE_TITLE_CHARS,
         "max_content_chars": config.MAX_NOTE_CONTENT_CHARS,
+        "max_comment_chars": config.MAX_NOTE_COMMENT_CHARS,
         "allowed_ext": sorted(config.ALLOWED_NOTE_FILES),
     }
 
@@ -470,7 +488,7 @@ def delete_note(nid):
     audit(db, user["id"], "note_deleted", "note", nid)
     db.commit()
 
-    from app import remove_tree  # 순환 import 방지를 위해 지연 import
+    remove_tree = _app_module().remove_tree
     target = os.path.join(NOTES_DIR, "user_%d" % (row["owner_id"] or 0),
                           "note_%d" % nid)
     files_ok = remove_tree(target) if inside_notes_dir(target) else False
@@ -542,3 +560,142 @@ def delete_note_attachment(aid):
         except OSError:
             pass
     return jsonify(ok=True, deleted=aid, file_removed=removed)
+
+
+# ---------------------------------------------------------------------------
+# 댓글 API
+#
+# 권한은 전부 서버에서 검사한다. 화면에서 단추를 감추는 것만으로는 막지 않는다.
+# 댓글은 메모에 딸린 것이므로 어떤 요청이든 먼저 메모를 찾아 그 메모를 볼 수
+# 있는지부터 본다. 볼 수 없으면 존재 여부도 알려주지 않고 404 로 답한다.
+# ---------------------------------------------------------------------------
+def comment_row(db, cid):
+    return db.execute(
+        "SELECT * FROM note_comments WHERE id = ?", (cid,)).fetchone()
+
+
+def comment_tree(db, user, note):
+    """댓글을 [부모, 그 아래 답글...] 모양으로 돌려준다.
+
+    한 번의 조회로 전부 가져와 파이썬에서 묶는다. 댓글 수가 많지 않고,
+    답글마다 추가 조회를 하면 N+1 이 된다.
+    """
+    rows = db.execute(
+        "SELECT c.*, u.display_name AS display_name, u.username AS username "
+        "FROM note_comments c LEFT JOIN users u ON u.id = c.user_id "
+        "WHERE c.note_id = ? ORDER BY c.id", (note["id"],)).fetchall()
+
+    out, by_id = [], {}
+    for r in rows:
+        d = row_to_dict(r)
+        d["author_name"] = d.pop("display_name", None) or d.pop("username", None)
+        d.pop("display_name", None)
+        d.pop("username", None)
+        d.pop("user_id", None)
+        d["is_mine"] = permissions.is_comment_author(user, r)
+        d["can_edit"] = permissions.can_edit_comment(user, r)
+        d["can_delete"] = permissions.can_delete_comment(user, note, r)
+        d["replies"] = []
+        by_id[r["id"]] = d
+        if r["parent_id"] is None:
+            out.append(d)
+        else:
+            parent = by_id.get(r["parent_id"])
+            # 부모가 없으면(있을 수 없지만) 맨 위에 둔다. 글이 사라지지 않게 한다.
+            (parent["replies"] if parent else out).append(d)
+    return out
+
+
+def clean_comment_text(raw):
+    """앞뒤 공백을 떼고 길이를 확인한다. 빈 댓글은 만들지 않는다."""
+    text = (raw or "").strip()
+    if not text:
+        abort(400, "내용을 입력해 주세요.")
+    if len(text) > config.MAX_NOTE_COMMENT_CHARS:
+        abort(400, "댓글은 %d자까지 쓸 수 있습니다." % config.MAX_NOTE_COMMENT_CHARS)
+    return text
+
+
+@api.get("/notes/<int:nid>/comments")
+@auth.login_required
+def list_comments(nid):
+    db = get_db()
+    user = auth.current_user()
+    note = get_note_or_404(db, nid)
+    permissions.require_view_note(user, note)
+    return jsonify(ok=True, comments=comment_tree(db, user, note))
+
+
+@api.post("/notes/<int:nid>/comments")
+@auth.login_required
+def create_comment(nid):
+    db = get_db()
+    user = auth.current_user()
+    note = get_note_or_404(db, nid)
+    permissions.require_write_comment(user, note)
+
+    body = request.get_json(silent=True) or {}
+    text = clean_comment_text(body.get("content"))
+
+    parent_id = body.get("parent_id")
+    if parent_id is not None:
+        parent = comment_row(db, parent_id)
+        if parent is None or parent["note_id"] != note["id"]:
+            abort(404, "답글을 달 댓글을 찾을 수 없습니다.")
+        # 깊이는 한 단계까지만. 답글에 또 답글을 달면 화면이 끝없이 밀린다.
+        if parent["parent_id"] is not None:
+            abort(400, "답글에는 다시 답글을 달 수 없습니다.")
+
+    now = ts()
+    cur = db.execute(
+        "INSERT INTO note_comments (note_id, parent_id, user_id, content,"
+        " created_at, updated_at) VALUES (?,?,?,?,?,?)",
+        (note["id"], parent_id, user["id"], text, now, now))
+    db.commit()
+    # 댓글 내용은 감사 로그에 남기지 않는다. (메시지 본문과 같은 원칙)
+    audit(db, user["id"], "note_comment_created", "note", note["id"],
+          "comment=%d%s" % (cur.lastrowid, " reply" if parent_id else ""))
+    return jsonify(ok=True, comments=comment_tree(db, user, note),
+                   created=cur.lastrowid)
+
+
+@api.patch("/note-comments/<int:cid>")
+@auth.login_required
+def update_comment(cid):
+    db = get_db()
+    user = auth.current_user()
+    row = comment_row(db, cid)
+    if row is None:
+        abort(404, "댓글을 찾을 수 없습니다.")
+    note = get_note_or_404(db, row["note_id"])
+    permissions.require_edit_comment(user, note, row)
+
+    body = request.get_json(silent=True) or {}
+    text = clean_comment_text(body.get("content"))
+    db.execute("UPDATE note_comments SET content = ?, updated_at = ? WHERE id = ?",
+               (text, ts(), cid))
+    db.commit()
+    return jsonify(ok=True, comments=comment_tree(db, user, note))
+
+
+@api.delete("/note-comments/<int:cid>")
+@auth.login_required
+def delete_comment(cid):
+    db = get_db()
+    user = auth.current_user()
+    row = comment_row(db, cid)
+    if row is None:
+        abort(404, "댓글을 찾을 수 없습니다.")
+    note = get_note_or_404(db, row["note_id"])
+    permissions.require_delete_comment(user, note, row)
+
+    # 답글은 FK 의 ON DELETE CASCADE 로 함께 지워진다. 몇 개가 사라지는지
+    # 미리 세어 두었다가 화면에 알려 준다.
+    n_replies = db.execute(
+        "SELECT COUNT(*) FROM note_comments WHERE parent_id = ?", (cid,)).fetchone()[0]
+    db.execute("DELETE FROM note_comments WHERE id = ?", (cid,))
+    db.commit()
+    audit(db, user["id"], "note_comment_deleted", "note", note["id"],
+          "comment=%d replies=%d" % (cid, n_replies))
+    return jsonify(ok=True, comments=comment_tree(db, user, note),
+                   deleted=cid, deleted_replies=n_replies)
