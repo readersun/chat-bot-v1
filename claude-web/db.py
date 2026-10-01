@@ -46,7 +46,7 @@ from flask import g
 import patch_rules
 from config import BACKUP_DIR, DATABASE_PATH, UPLOAD_DIR
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -296,7 +296,12 @@ CREATE TABLE IF NOT EXISTS patch_modules (
     label           TEXT NOT NULL DEFAULT '',
     version_rule_id INTEGER,
     sort_order      INTEGER NOT NULL DEFAULT 0,
+    -- is_active  = 스캐너가 이 모듈로 파일을 매칭할지. (API 전용, 화면 없음)
+    -- is_visible = 사용자 패치 화면에 보일지. 숨겨도 매칭은 계속한다.
+    --   둘을 나눈 이유: 숨기려고 매칭을 끄면 새로 들어온 파일이 "매칭 안 된
+    --   파일" 로 쌓여서, 등록해 둔 모듈인데 등록하라는 목록에 뜬다.
     is_active       INTEGER NOT NULL DEFAULT 1,
+    is_visible      INTEGER NOT NULL DEFAULT 1,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     UNIQUE (product_id, name),
@@ -321,6 +326,9 @@ CREATE TABLE IF NOT EXISTS patch_files (
     mtime_ns        INTEGER NOT NULL DEFAULT 0,
     sha256          TEXT NOT NULL DEFAULT '',
     content_changed INTEGER NOT NULL DEFAULT 0,
+    -- 관리자가 이 파일 한 건만 감춘 상태. 스캔은 이 칸을 건드리지 않는다.
+    -- (다시 스캔해도 숨김이 풀리면 안 된다)
+    is_visible      INTEGER NOT NULL DEFAULT 1,
     is_missing      INTEGER NOT NULL DEFAULT 0,
     first_seen_at   TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,
@@ -540,6 +548,10 @@ def pending_migrations(conn):
             todo.append("CREATE TABLE %s" % t)
     if table_exists(conn, "users") and "patch_all_sites" not in column_names(conn, "users"):
         todo.append("users.patch_all_sites 추가")
+    # v7 : 모듈/파일 단위 공개 여부
+    for t, c in (("patch_modules", "is_visible"), ("patch_files", "is_visible")):
+        if table_exists(conn, t) and c not in column_names(conn, t):
+            todo.append("%s.%s 추가" % (t, c))
     if table_exists(conn, "sessions"):
         cols = column_names(conn, "sessions")
         if "owner_id" not in cols:
@@ -647,6 +659,15 @@ def migrate(verbose=True):
                 conn.execute("ALTER TABLE users ADD COLUMN patch_all_sites "
                              "INTEGER NOT NULL DEFAULT 1")
                 steps.append("users.patch_all_sites 추가 (기본 1 = 모든 사이트)")
+
+            # --- v7 : 모듈/파일 단위 공개 여부 --------------------------
+            # 기본 1 이어야 지금 보이는 것이 그대로 보인다. 0 으로 넣으면
+            # 마이그레이션 직후 패치 목록이 통째로 비어 버린다.
+            for t in ("patch_modules", "patch_files"):
+                if "is_visible" not in column_names(conn, t):
+                    conn.execute("ALTER TABLE %s ADD COLUMN is_visible "
+                                 "INTEGER NOT NULL DEFAULT 1" % t)
+                    steps.append("%s.is_visible 추가 (기본 1 = 보임)" % t)
 
             # 내장 버전 규칙. 표를 처음 만들 때만 넣는다.
             if not had_version_rules:

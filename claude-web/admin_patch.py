@@ -142,6 +142,15 @@ def overview():
             "SELECT COUNT(*) c FROM patch_files"
             " WHERE product_id = ? AND module_id IS NULL AND is_missing = 0",
             (p["id"],)).fetchone()["c"]
+        # 어디를 꺼 뒀는지 한눈에 보여야 한다. 끈 것을 잊으면 "파일은 올렸는데
+        # 사용자가 못 받는다" 를 DAS 부터 뒤지게 된다.
+        p["hidden_module_count"] = db.execute(
+            "SELECT COUNT(*) c FROM patch_modules WHERE product_id = ? AND is_visible = 0",
+            (p["id"],)).fetchone()["c"]
+        p["hidden_file_count"] = db.execute(
+            "SELECT COUNT(*) c FROM patch_files"
+            " WHERE product_id = ? AND is_visible = 0 AND is_missing = 0",
+            (p["id"],)).fetchone()["c"]
 
     rules = [{k: r[k] for k in r.keys()} for r in db.execute(
         "SELECT * FROM patch_version_rules ORDER BY is_builtin DESC, name").fetchall()]
@@ -369,7 +378,14 @@ def update_module(mid):
     if "label" in data:
         fields.append("label = ?"); values.append((data.get("label") or "").strip()[:100])
     if "is_active" in data:
+        # 스캐너가 이 모듈로 매칭할지. 화면에 없고 API 로만 끈다.
         fields.append("is_active = ?"); values.append(1 if data["is_active"] else 0)
+    if "is_visible" in data:
+        # 사용자 화면에 보일지. 매칭은 계속하므로 다시 켜면 즉시 돌아온다.
+        fields.append("is_visible = ?"); values.append(1 if data["is_visible"] else 0)
+        audit(db, current_user()["id"],
+              "patch.module_shown" if data["is_visible"] else "patch.module_hidden",
+              "patch_module", mid, row["name"])
     if "sort_order" in data:
         fields.append("sort_order = ?"); values.append(int(data.get("sort_order") or 0))
     if "version_rule_id" in data:
@@ -417,14 +433,143 @@ def copy_modules():
             continue
         db.execute(
             "INSERT INTO patch_modules (product_id, name, label, version_rule_id,"
-            " sort_order, is_active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            " sort_order, is_active, is_visible, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
             (dst["id"], r["name"], r["label"], r["version_rule_id"], r["sort_order"],
-             r["is_active"], now, now))
+             r["is_active"], r["is_visible"], now, now))
         made += 1
     audit(db, current_user()["id"], "patch.modules_copied", "patch_product", dst["id"],
           "from=%d n=%d" % (src["id"], made))
     db.commit()
     return jsonify(ok=True, copied=made, skipped=len(rows) - made)
+
+
+# ---------------------------------------------------------------------------
+# 파일 공개 여부
+#
+# 사이트 → 제품 라인 → 모듈 까지는 묶음 단위로 끄고, 여기서는 tar 한 건을
+# 끈다. 잘못 올라간 빌드, 특정 고객사에만 나가야 하는 패치처럼 "묶음은
+# 맞는데 이 파일만 아니다" 가 실제로 생긴다.
+#
+# 끄는 것은 색인의 칸 하나일 뿐이고 DAS 의 파일은 건드리지 않는다. 스캔이
+# 다시 돌아도 이 칸은 그대로다(patch_scan 의 UPDATE 문에 들어 있지 않다).
+# ---------------------------------------------------------------------------
+@api.get("/files")
+@admin_required
+def list_files():
+    """
+    한 제품 라인의 파일. 사용자 화면과 달리 숨긴 것, 매칭 안 된 것, 사라진
+    것까지 모두 보여 준다. 끈 것을 다시 찾을 수 있어야 하므로 거르지 않는다.
+    날짜 목록을 함께 주어 화면이 한 번만 부르게 한다.
+    """
+    db = get_db()
+    pid = request.args.get("product_id", type=int)
+    product = _row_or_404(db, "patch_products", pid, "제품 라인")
+
+    dates = [{"date_dir": r["date_dir"], "date_at": r["date_at"],
+              "count": r["n"], "hidden": r["hidden"]}
+             for r in db.execute(
+                 "SELECT date_dir, MAX(date_at) AS date_at, COUNT(*) AS n,"
+                 "       SUM(CASE WHEN is_visible = 0 THEN 1 ELSE 0 END) AS hidden"
+                 "  FROM patch_files WHERE product_id = ?"
+                 " GROUP BY date_dir"
+                 " ORDER BY (date_at IS NULL), date_at DESC, date_dir DESC",
+                 (pid,)).fetchall()]
+
+    date_dir = (request.args.get("date") or "").strip()
+    if not date_dir and dates:
+        date_dir = dates[0]["date_dir"]
+
+    files = []
+    if date_dir:
+        files = [{
+            "id": r["id"],
+            "filename": r["filename"],
+            "module": r["module_name"],
+            "module_visible": None if r["module_name"] is None else bool(r["module_visible"]),
+            "version": r["version"],
+            "size": r["size"],
+            "is_visible": bool(r["is_visible"]),
+            "is_missing": bool(r["is_missing"]),
+            "content_changed": bool(r["content_changed"]),
+        } for r in db.execute(
+            "SELECT f.*, m.name AS module_name, m.is_visible AS module_visible"
+            "  FROM patch_files f LEFT JOIN patch_modules m ON m.id = f.module_id"
+            " WHERE f.product_id = ? AND f.date_dir = ?"
+            " ORDER BY (f.module_id IS NULL), m.sort_order, m.name,"
+            "          f.version_sort DESC, f.filename",
+            (pid, date_dir)).fetchall()]
+
+    return jsonify(ok=True, product={"id": product["id"], "name": product["name"]},
+                   dates=dates, date=date_dir, files=files)
+
+
+@api.patch("/files/<int:fid>")
+@admin_required
+def update_file(fid):
+    db, data = get_db(), _body()
+    row = _row_or_404(db, "patch_files", fid, "파일")
+    if "is_visible" not in data:
+        abort(400, "바꿀 내용이 없습니다.")
+    on = 1 if data["is_visible"] else 0
+    db.execute("UPDATE patch_files SET is_visible = ? WHERE id = ?", (on, fid))
+    audit(db, current_user()["id"],
+          "patch.file_shown" if on else "patch.file_hidden",
+          "patch_file", fid, "%s/%s" % (row["date_dir"], row["filename"]))
+    db.commit()
+    return jsonify(ok=True)
+
+
+@api.post("/files/visibility")
+@admin_required
+def set_files_visibility():
+    """
+    여러 건을 한 번에. 날짜 폴더 하나를 통째로 끄는 것이 가장 흔하다.
+    (잘못 올라간 배포 하루를 걷어낼 때)
+
+        {"product_id": 3, "date": "260923", "is_visible": false}
+        {"ids": [11, 12], "is_visible": true}
+
+    날짜를 지정하면 그 폴더의 파일 전부에 적용한다. 날짜 폴더 자체를 따로
+    기록하지 않고 파일에 거는 이유는, 그래야 나중에 들어온 파일이 조용히
+    숨겨지지 않고 보이는 상태로 들어오기 때문이다. 하루를 다시 걷어내야
+    하면 한 번 더 누르면 된다. 모르는 사이에 안 보이는 것보다 낫다.
+    """
+    db, data = get_db(), _body()
+    if "is_visible" not in data:
+        abort(400, "is_visible 값이 필요합니다.")
+    on = 1 if data["is_visible"] else 0
+
+    ids = data.get("ids")
+    if ids:
+        try:
+            ids = [int(i) for i in ids]
+        except (TypeError, ValueError):
+            abort(400, "파일 id 가 잘못됐습니다.")
+        if len(ids) > 2000:
+            abort(400, "한 번에 2000건까지만 됩니다.")
+        marks = ",".join("?" * len(ids))
+        n = db.execute("UPDATE patch_files SET is_visible = ? WHERE id IN (%s)" % marks,
+                       [on] + ids).rowcount
+        target, label = "patch_file", "ids=%d건" % len(ids)
+    else:
+        pid = int(data.get("product_id") or 0)
+        product = _row_or_404(db, "patch_products", pid, "제품 라인")
+        date_dir = (data.get("date") or "").strip()
+        sql = "UPDATE patch_files SET is_visible = ? WHERE product_id = ?"
+        params = [on, pid]
+        if date_dir:
+            sql += " AND date_dir = ?"
+            params.append(date_dir)
+        n = db.execute(sql, params).rowcount
+        target = "patch_product"
+        label = "%s %s" % (product["name"], date_dir or "(전체 날짜)")
+
+    audit(db, current_user()["id"],
+          "patch.files_shown" if on else "patch.files_hidden",
+          target, data.get("product_id") or "", "%s n=%d" % (label, n))
+    db.commit()
+    return jsonify(ok=True, changed=n)
 
 
 # ---------------------------------------------------------------------------

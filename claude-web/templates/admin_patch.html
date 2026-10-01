@@ -160,9 +160,10 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
   var CSRF = {{ csrf|tojson }};
 
   var TABS = [["roots", "와칭 루트"], ["sites", "사이트"], ["products", "제품 라인"],
-              ["modules", "모듈"], ["rules", "버전 규칙"], ["scan", "스캔"]];
+              ["modules", "모듈"], ["files", "파일"], ["rules", "버전 규칙"],
+              ["scan", "스캔"]];
   var state = { tab: "roots", data: null, productId: null, test: null, scans: [],
-                unmatched: [] };
+                unmatched: [], fileDate: null };
 
   /* ----------------------------------------------------------- 공통 */
   function el(tag, props, kids) {
@@ -472,6 +473,14 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
         el("td", { class: "num" }, [p.unmatched_count
           ? el("span", { class: "badge warn", text: String(p.unmatched_count) })
           : document.createTextNode("0")]),
+        /* 꺼 둔 것을 잊으면 "파일은 올렸는데 사용자가 못 받는다" 를 DAS 부터
+           뒤지게 된다. 눈에 띄는 자리에 세어서 보여 준다. */
+        el("td", { class: "num" }, [(p.hidden_module_count || p.hidden_file_count)
+          ? el("span", { class: "badge mute",
+              text: (p.hidden_module_count ? "모듈 " + p.hidden_module_count : "")
+                + (p.hidden_module_count && p.hidden_file_count ? " / " : "")
+                + (p.hidden_file_count ? "파일 " + p.hidden_file_count : "") })
+          : document.createTextNode("-")]),
         el("td", { class: "center" }, [toggle(p.name + " 공개", p.is_visible, function (on) {
           api("PATCH", "/api/admin/patch/products/" + p.id, { is_visible: on })
             .then(function () { reload("저장했습니다."); })
@@ -485,10 +494,10 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
       el("div", { class: "wrap-x" }, [el("table", { class: "t" }, [
         el("caption", { text: "사이트가 공개돼 있어도 제품 라인을 켜야 사용자에게 보입니다." }),
         el("thead", {}, [el("tr", {}, ["사이트", "폴더 이름", "표시 이름", "기본 버전 규칙",
-                                       "모듈", "미매칭", "공개"].map(function (h, i) {
-          return el("th", { class: i >= 4 ? (i === 6 ? "center" : "right") : "", text: h });
+                                       "모듈", "미매칭", "숨김", "공개"].map(function (h, i) {
+          return el("th", { class: i >= 4 ? (i === 7 ? "center" : "right") : "", text: h });
         }))]),
-        el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "7" }, [
+        el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "8" }, [
           el("div", { class: "empty", text: "아직 발견된 제품 라인이 없습니다." })])])])
       ])])
     ]);
@@ -545,6 +554,15 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
               } })]),
             el("td", {}, [ruleSel]),
             el("td", { class: "num", text: String(m.file_count) }),
+            el("td", { class: "center" }, [toggle(m.name + " 공개", m.is_visible, function (on) {
+              api("PATCH", "/api/admin/patch/modules/" + m.id, { is_visible: on })
+                .then(function () {
+                  loadModules();
+                  reload(on ? "다시 보이게 했습니다."
+                            : "숨겼습니다. 이 모듈의 파일은 사용자 목록과 다운로드에서 빠집니다.");
+                })
+                .catch(function (er) { notify(er.message, "error"); });
+            })]),
             el("td", { class: "right" }, [btn("삭제", "danger", function () {
               if (!window.confirm("모듈 " + m.name + " 을(를) 지웁니다.\n"
                   + "그 모듈로 잡혔던 파일은 매칭 안 된 목록으로 돌아갑니다.\n"
@@ -556,10 +574,14 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
           ]);
         });
         listBox.appendChild(el("table", { class: "t" }, [
-          el("caption", { text: "이름은 파일 앞부분과 글자 그대로 같아야 합니다. 대소문자도 같습니다." }),
-          el("thead", {}, [el("tr", {}, ["이름", "표시 이름", "버전 규칙", "파일", ""].map(
-            function (h, i) { return el("th", { class: i === 4 ? "right" : (i === 3 ? "right" : ""), text: h }); }))]),
-          el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "5" }, [
+          el("caption", { text: "이름은 파일 앞부분과 글자 그대로 같아야 합니다. 대소문자도 같습니다. "
+            + "공개를 끄면 그 모듈의 파일 전부가 사용자 화면에서 사라지지만, 스캔은 계속 매칭합니다." }),
+          el("thead", {}, [el("tr", {}, ["이름", "표시 이름", "버전 규칙", "파일", "공개", ""].map(
+            function (h, i) {
+              return el("th", { class: i === 3 ? "right" : (i === 4 ? "center" : (i === 5 ? "right" : "")),
+                                text: h });
+            }))]),
+          el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "6" }, [
             el("div", { class: "empty",
               text: "등록된 모듈이 없습니다. 스캔 묶음의 '매칭 안 된 파일' 에서 한 번에 등록할 수 있습니다." })])])])
         ]));
@@ -867,6 +889,143 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
     return box;
   }
 
+
+  /* ------------------------------------------------------------- 파일
+     tar 한 건을 끄는 곳. 묶음 단위(사이트/제품/모듈)로 끄는 것과 달리
+     "묶음은 맞는데 이 파일만 아니다" 를 위한 자리다. 잘못 올라간 빌드,
+     특정 고객사에만 나가야 하는 패치가 여기 걸린다.
+
+     끄는 것은 색인의 칸 하나다. DAS 의 파일은 건드리지 않고, 다시 스캔해도
+     꺼 둔 상태가 그대로 남는다. */
+  function viewFiles() {
+    var d = state.data;
+    if (!d.products.length) {
+      return el("div", { class: "card" }, [el("div", { class: "empty",
+        text: "제품 라인이 아직 없습니다. 와칭 루트를 등록하고 검사를 돌려 보세요." })]);
+    }
+    if (!state.productId) { state.productId = d.products[0].id; }
+
+    var dateBox = el("div", { class: "inline", style: "gap:6px" });
+    var listBox = el("div", { class: "wrap-x" },
+                     [el("div", { class: "empty", text: "불러오는 중..." })]);
+    var toolBox = el("div", { class: "inline" });
+
+    function save(url, body, msg) {
+      return api("PATCH", url, body)
+        .then(function () { load(); reload(msg); })
+        .catch(function (e) { notify(e.message, "error"); });
+    }
+
+    function bulk(on, dateDir) {
+      var what = dateDir ? ("날짜 " + dateDir + " 의 파일 전부") : "이 제품 라인의 파일 전부";
+      if (!on && !window.confirm(what + "를 숨깁니다.\n"
+          + "사용자 목록과 다운로드에서 사라집니다. DAS 의 파일은 그대로입니다.\n"
+          + "나중에 같은 날짜로 새 파일이 들어오면 그 파일은 보이는 상태로 들어옵니다.\n"
+          + "계속할까요?")) { return; }
+      api("POST", "/api/admin/patch/files/visibility",
+          { product_id: state.productId, date: dateDir || "", is_visible: on })
+        .then(function (r) {
+          load();
+          reload((on ? "다시 보이게 했습니다: " : "숨겼습니다: ") + r.changed + "건");
+        })
+        .catch(function (e) { notify(e.message, "error"); });
+    }
+
+    function load() {
+      var url = "/api/admin/patch/files?product_id=" + state.productId
+              + (state.fileDate ? "&date=" + encodeURIComponent(state.fileDate) : "");
+      api("GET", url).then(function (r) {
+        state.fileDate = r.date || null;
+
+        /* 날짜 고르는 줄 */
+        clear(dateBox);
+        if (!r.dates.length) {
+          dateBox.appendChild(el("span", { class: "n", text: "날짜 폴더가 없습니다." }));
+        }
+        r.dates.forEach(function (dt) {
+          var on = dt.date_dir === state.fileDate;
+          var text = dt.date_dir + " (" + dt.count + ")";
+          var b = el("button", {
+            class: "btn sm " + (on ? "primary" : ""), type: "button",
+            "aria-current": on ? "true" : null,
+            title: dt.hidden ? ("숨긴 파일 " + dt.hidden + "건") : null,
+            onclick: function () { state.fileDate = dt.date_dir; load(); }
+          }, [document.createTextNode(text)]);
+          if (dt.hidden) {
+            b.appendChild(document.createTextNode(" "));
+            b.appendChild(el("span", { class: "badge warn", text: "숨김 " + dt.hidden }));
+          }
+          dateBox.appendChild(b);
+        });
+
+        /* 날짜 통째로 */
+        clear(toolBox);
+        if (state.fileDate) {
+          toolBox.appendChild(el("span", { class: "n", text: state.fileDate + " 통째로" }));
+          toolBox.appendChild(btn("전부 숨기기", "danger", function () { bulk(false, state.fileDate); }));
+          toolBox.appendChild(btn("전부 보이기", "", function () { bulk(true, state.fileDate); }));
+        }
+
+        /* 파일 표 */
+        clear(listBox);
+        var rows = r.files.map(function (f) {
+          var marks = [];
+          if (f.module === null) {
+            marks.push(el("span", { class: "badge mute", text: "매칭 안 됨" }));
+          } else if (f.module_visible === false) {
+            marks.push(el("span", { class: "badge warn", text: "모듈 숨김" }));
+          }
+          if (f.is_missing) { marks.push(el("span", { class: "badge bad", text: "사라짐" })); }
+          if (f.content_changed) { marks.push(el("span", { class: "badge warn", text: "내용 바뀜" })); }
+
+          return el("tr", {}, [
+            el("td", { class: "strong", text: f.module === null ? "-" : f.module }),
+            el("td", { class: "num mono", text: f.version || "-" }),
+            el("td", {}, [el("code", { class: "mono", text: f.filename })]),
+            el("td", { class: "num right", text: bytes(f.size) }),
+            el("td", {}, [el("div", { class: "inline" }, marks)]),
+            el("td", { class: "center" }, [toggle(f.filename + " 공개", f.is_visible, function (on) {
+              save("/api/admin/patch/files/" + f.id, { is_visible: on },
+                   on ? "다시 보이게 했습니다." : "숨겼습니다.");
+            })])
+          ]);
+        });
+
+        listBox.appendChild(el("table", { class: "t" }, [
+          el("caption", { text: "숨긴 것과 매칭 안 된 것까지 모두 나옵니다. 끈 것을 다시 찾을 수 있어야 하므로 거르지 않습니다." }),
+          el("thead", {}, [el("tr", {}, ["모듈", "버전", "파일 이름", "크기", "상태", "공개"].map(
+            function (h, i) {
+              return el("th", { class: i === 3 ? "right" : (i === 5 ? "center" : ""), text: h });
+            }))]),
+          el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "6" }, [
+            el("div", { class: "empty",
+              text: "이 날짜에 파일이 없습니다. 위에서 다른 날짜를 골라 보세요." })])])])
+        ]));
+      }).catch(function (e) { notify(e.message, "error"); });
+    }
+
+    var card = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "파일" }),
+        el("label", { class: "inline" }, [
+          el("span", { class: "n", text: "제품 라인" }),
+          productSelect(function (id) { state.productId = id; state.fileDate = null; render(); })
+        ]),
+        el("span", { class: "spacer" }),
+        toolBox
+      ]),
+      el("div", { class: "inline", style: "padding:0 0 12px" }, [dateBox]),
+      listBox,
+      el("p", { class: "hint",
+        text: "공개를 끄면 사용자 목록과 다운로드에서 함께 사라집니다. 파일 주소를 알아도 받을 수 없습니다. "
+          + "DAS 의 파일은 건드리지 않으므로 다시 켜면 그대로 돌아옵니다. "
+          + "누가 무엇을 언제 숨겼는지는 감사 기록에 남습니다." })
+    ]);
+
+    load();
+    return card;
+  }
+
   /* ----------------------------------------------------------- 묶기 */
   function render() {
     var tabs = document.getElementById("tabs");
@@ -884,7 +1043,8 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
     if (!state.data) { body.appendChild(el("div", { class: "empty", text: "불러오는 중..." })); return; }
 
     var view = { roots: viewRoots, sites: viewSites, products: viewProducts,
-                 modules: viewModules, rules: viewRules, scan: viewScan }[state.tab];
+                 modules: viewModules, files: viewFiles, rules: viewRules,
+                 scan: viewScan }[state.tab];
     body.appendChild(view());
   }
 

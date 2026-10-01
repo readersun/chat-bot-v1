@@ -193,13 +193,18 @@ def tree():
 def dates():
     db, user = get_db(), auth.current_user()
     product = visible_product(db, user, request.args.get("product_id", type=int))
+    # 건수는 "사용자가 실제로 받을 수 있는 것" 이어야 한다. 매칭 안 된 파일,
+    # 숨긴 파일, 숨긴 모듈의 파일은 세지 않는다. 세어 버리면 날짜를 눌렀는데
+    # 목록이 비는 일이 생긴다.
     rows = db.execute(
-        "SELECT date_dir, MAX(date_at) AS date_at, COUNT(*) AS n,"
-        "       SUM(CASE WHEN module_id IS NULL THEN 0 ELSE 1 END) AS matched"
-        "  FROM patch_files WHERE product_id = ?"
-        " GROUP BY date_dir"
+        "SELECT f.date_dir AS date_dir, MAX(f.date_at) AS date_at, COUNT(*) AS n,"
+        "       SUM(CASE WHEN m.id IS NULL THEN 0 ELSE 1 END) AS matched"
+        "  FROM patch_files f"
+        "  LEFT JOIN patch_modules m ON m.id = f.module_id AND m.is_visible = 1"
+        " WHERE f.product_id = ? AND f.is_visible = 1"
+        " GROUP BY f.date_dir"
         # 날짜를 못 읽은 폴더는 버리지 않고 맨 뒤로 보낸다
-        " ORDER BY (date_at IS NULL), date_at DESC, date_dir DESC",
+        " ORDER BY (date_at IS NULL), date_at DESC, f.date_dir DESC",
         (product["id"],)).fetchall()
     return jsonify(ok=True, dates=[
         {"date_dir": r["date_dir"], "date_at": r["date_at"], "count": r["matched"]}
@@ -215,14 +220,18 @@ def files():
 
     매칭 안 된 파일(module_id IS NULL)은 사용자 목록에 나오지 않는다.
     그것은 관리자가 모듈을 등록하라고 보는 목록이다.
+
+    관리자가 끈 것도 나오지 않는다. 모듈을 끄면 그 모듈의 파일 전부가,
+    파일 한 건을 끄면 그것만 사라진다. 거르는 곳이 목록과 다운로드 두 곳
+    뿐이어야 하므로 두 조건을 같은 모양으로 써 둔다.
     """
     db, user = get_db(), auth.current_user()
     product = visible_product(db, user, request.args.get("product_id", type=int))
 
     sql = ["SELECT f.*, m.name AS module_name, m.label AS module_label",
            "  FROM patch_files f",
-           "  JOIN patch_modules m ON m.id = f.module_id",
-           " WHERE f.product_id = ?"]
+           "  JOIN patch_modules m ON m.id = f.module_id AND m.is_visible = 1",
+           " WHERE f.product_id = ? AND f.is_visible = 1"]
     params = [product["id"]]
 
     date_dir = (request.args.get("date") or "").strip()
@@ -237,9 +246,13 @@ def files():
 
     if request.args.get("latest") in ("1", "true", "yes"):
         sql.append(
+            # f2 에도 is_visible 을 걸어야 한다. 빼면 "가장 높은 버전" 이
+            # 숨긴 파일로 뽑히고, 바깥 조건이 그 줄을 떨어뜨려서 보이는 옛
+            # 버전이 있는데도 모듈이 통째로 사라진다.
             " AND f.id = (SELECT f2.id FROM patch_files f2"
             "              WHERE f2.product_id = f.product_id"
             "                AND f2.module_id = f.module_id"
+            "                AND f2.is_visible = 1"
             "              ORDER BY f2.version_sort DESC, f2.date_dir DESC LIMIT 1)")
 
     sql.append(" ORDER BY m.sort_order, m.name, f.version_sort DESC, f.date_dir DESC")
@@ -276,8 +289,11 @@ def download(fid):
         "  JOIN patch_products p ON p.id = f.product_id"
         "  JOIN patch_sites s ON s.id = p.site_id"
         "  JOIN patch_roots r ON r.id = s.root_id"
-        "  LEFT JOIN patch_modules m ON m.id = f.module_id"
-        " WHERE f.id = ? AND p.is_visible = 1 AND " + where,
+        # LEFT 가 아니라 JOIN 이다. 매칭 안 된 파일과 숨긴 모듈의 파일은
+        # 목록에 없으니 다운로드도 없어야 한다. 목록에만 걸고 여기를 빼면
+        # id 를 아는 사람이 그대로 받아 간다.
+        "  JOIN patch_modules m ON m.id = f.module_id AND m.is_visible = 1"
+        " WHERE f.id = ? AND f.is_visible = 1 AND p.is_visible = 1 AND " + where,
         [fid] + params).fetchone()
 
     # 목록에 안 보이는 것은 다운로드도 404 다. 403 으로 "있긴 있다" 를
