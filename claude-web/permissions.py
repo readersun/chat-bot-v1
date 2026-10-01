@@ -282,3 +282,150 @@ def visible_sessions_clause(user, scope="all"):
         "            WHERE sm.session_id = s.id AND sm.user_id = ?))",
         [uid, uid],
     )
+
+
+# ---------------------------------------------------------------------------
+# 메뉴 권한 (v6)
+#
+# "문이 열리는가" 를 정한다. 그 안에서 무엇이 보이는지는 위의 세션/메모 규칙이
+# 따로 정한다. 두 겹이고 서로 섞이지 않는다. notes 메뉴가 있어도 남의 private
+# 메모는 여전히 안 보인다.
+#
+# 레일에서 항목을 안 그리는 것은 권한이 아니다. 주소를 직접 치면 들어간다.
+# 그래서 화면과 API 양쪽에 require_menu 를 건다.
+# ---------------------------------------------------------------------------
+MENUS = ("chat", "notes", "patch")
+
+MENU_LABELS = {"chat": "채팅", "notes": "메모", "patch": "패치"}
+
+# 메뉴를 하나도 못 받은 사람을 어디로 보낼지. 가진 것 중 첫 번째다.
+MENU_PATHS = {"chat": "/", "notes": "/notes", "patch": "/patch"}
+
+# 신규 사용자 기본값. 패치는 고객사에 나가는 바이너리라 기본으로 열지 않는다.
+DEFAULT_NEW_USER_MENUS = ("chat",)
+
+
+def user_menus(db, user):
+    """그 사람이 볼 수 있는 메뉴 집합. 관리자는 항상 전부 가진다."""
+    if not user:
+        return set()
+    if is_admin(user):
+        # 관리자가 자기 메뉴를 다 꺼서 스스로 갇히는 일을 막는다.
+        return set(MENUS)
+    rows = db.execute("SELECT menu_key FROM user_menus WHERE user_id = ?",
+                      (user["id"],)).fetchall()
+    return {r["menu_key"] for r in rows if r["menu_key"] in MENUS}
+
+
+def has_menu(db, user, key):
+    return key in user_menus(db, user)
+
+
+def require_menu(db, user, key):
+    if not user:
+        abort(401, "로그인이 필요합니다.")
+    if not has_menu(db, user, key):
+        abort(403, "%s 메뉴를 쓸 권한이 없습니다. 관리자에게 요청하세요."
+              % MENU_LABELS.get(key, key))
+
+
+def landing_path(db, user):
+    """로그인 직후 보낼 곳. 가진 메뉴가 하나도 없으면 None."""
+    mine = user_menus(db, user)
+    for key in MENUS:          # chat -> notes -> patch 순서 고정
+        if key in mine:
+            return MENU_PATHS[key]
+    return None
+
+
+def set_user_menus(db, user_id, keys, granted_by=None):
+    """그 사람의 메뉴를 통째로 교체한다. 돌려주는 값은 실제로 남은 집합."""
+    from db import ts
+    keep = {k for k in keys if k in MENUS}
+    db.execute("DELETE FROM user_menus WHERE user_id = ?", (user_id,))
+    if keep:
+        db.executemany(
+            "INSERT INTO user_menus (user_id, menu_key, granted_at, granted_by)"
+            " VALUES (?,?,?,?)",
+            [(user_id, k, ts(), granted_by) for k in sorted(keep)])
+    return keep
+
+
+# ---------------------------------------------------------------------------
+# 패치 사이트 범위 (v6)
+#
+# patch 메뉴 하나로 모든 고객사의 패치가 보인다. 사이트가 하나일 때는 문제가
+# 아니었지만 여러 고객사 폴더가 한 서버에 놓이면 A사 담당자가 B사에 나간
+# 버전을 받아 갈 수 있다. 그래서 범위를 하나 더 둔다.
+#
+#   users.patch_all_sites = 1  전체 (기본값, 지금 동작 그대로)
+#                          = 0  user_patch_sites 에 고른 것만
+#
+# 거르는 지점은 목록 질의와 다운로드 두 곳이다. 목록에 안 보이는 것은
+# 다운로드도 404 다.
+# ---------------------------------------------------------------------------
+def patch_all_sites(user):
+    if not user:
+        return False
+    if is_admin(user):
+        return True
+    try:
+        return bool(user["patch_all_sites"])
+    except (IndexError, KeyError):
+        return True        # 마이그레이션 전 행. 지금 동작을 바꾸지 않는다.
+
+
+def allowed_site_ids(db, user):
+    """볼 수 있는 사이트 id 집합. None 이면 '전부' 라는 뜻이다."""
+    if patch_all_sites(user):
+        return None
+    rows = db.execute("SELECT site_id FROM user_patch_sites WHERE user_id = ?",
+                      (user["id"],)).fetchall()
+    return {r["site_id"] for r in rows}
+
+
+def visible_sites_clause(db, user, alias="s"):
+    """
+    사이트 목록을 DB 단계에서 걸러낸다. 반환: (where 조각, 파라미터 list).
+
+    숨긴 사이트는 누구에게도 안 보인다. 관리자도 여기서는 못 본다.
+    관리자가 숨긴 것을 보는 자리는 /admin/patch 다. 사용자 화면에서 관리자만
+    더 보이면 "나한테는 보이는데요" 로 끝나는 문의가 생긴다.
+    """
+    where = ["%s.is_visible = 1" % alias]
+    params = []
+    ids = allowed_site_ids(db, user)
+    if ids is not None:
+        if not ids:
+            return "0", []           # 고른 사이트가 하나도 없다
+        marks = ",".join("?" for _ in ids)
+        where.append("%s.id IN (%s)" % (alias, marks))
+        params.extend(sorted(ids))
+    return " AND ".join(where), params
+
+
+def can_view_site(db, user, site_row):
+    if site_row is None or not site_row["is_visible"]:
+        return False
+    ids = allowed_site_ids(db, user)
+    return ids is None or site_row["id"] in ids
+
+
+def set_user_patch_sites(db, user_id, all_sites, site_ids, granted_by=None):
+    """사이트 범위를 통째로 교체한다."""
+    from db import ts
+    db.execute("UPDATE users SET patch_all_sites = ? WHERE id = ?",
+               (1 if all_sites else 0, user_id))
+    db.execute("DELETE FROM user_patch_sites WHERE user_id = ?", (user_id,))
+    keep = []
+    if not all_sites:
+        for sid in sorted(set(int(x) for x in site_ids)):
+            row = db.execute("SELECT id FROM patch_sites WHERE id = ?", (sid,)).fetchone()
+            if row:
+                keep.append(sid)
+        if keep:
+            db.executemany(
+                "INSERT INTO user_patch_sites (user_id, site_id, granted_at, granted_by)"
+                " VALUES (?,?,?,?)",
+                [(user_id, sid, ts(), granted_by) for sid in keep])
+    return keep

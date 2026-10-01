@@ -95,7 +95,18 @@ def create_user(db, username, password, display_name="", role="user", is_active=
         " created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
         (username, generate_password_hash(password),
          (display_name or username).strip()[:100], role, 1 if is_active else 0, now, now))
-    return cur.lastrowid
+    uid = cur.lastrowid
+
+    # 기본 메뉴를 함께 넣는다. 안 넣으면 새 사용자가 로그인하자마자 "권한 없음"
+    # 화면을 본다. 관리자는 permissions.user_menus 가 알아서 전부 돌려주므로
+    # 행을 따로 만들지 않는다.
+    if role != "admin":
+        import permissions
+        db.executemany(
+            "INSERT OR IGNORE INTO user_menus (user_id, menu_key, granted_at)"
+            " VALUES (?,?,?)",
+            [(uid, k, now) for k in permissions.DEFAULT_NEW_USER_MENUS])
+    return uid
 
 
 def set_password(db, uid, password):
@@ -186,6 +197,28 @@ def admin_required(fn):
             abort(403, "관리자 권한이 필요합니다.")
         return fn(*a, **kw)
     return wrapper
+
+
+def menu_required(key):
+    """
+    메뉴 권한 검사. 화면 라우트와 API 양쪽에 건다.
+
+    레일에서 항목을 안 그리는 것은 장식이다. 이 데코레이터를 API 하나에
+    빼먹으면 권한 없는 사람이 curl 한 줄로 목록을 받아 간다.
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **kw):
+            import permissions
+            user = current_user()
+            if user is None:
+                if wants_json():
+                    abort(401, "로그인이 필요합니다.")
+                return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
+            permissions.require_menu(get_db(), user, key)
+            return fn(*a, **kw)
+        return wrapper
+    return deco
 
 
 # ---------------------------------------------------------------------------

@@ -1,23 +1,24 @@
 {#
   왼쪽 고정 내비게이션 레일.
-  채팅 / 메모 / 관리자 화면이 함께 넣는다. 모양은 static/rail.css 에 있다.
+  채팅 / 메모 / 패치 / 관리자 화면이 함께 넣는다. 모양은 static/rail.css 에 있다.
 
   받는 값
-    rail      : 지금 화면 키 ('chat' | 'notes' | 'dashboard' | 'users' | 'claude'
-                | 'storage' | 'system')
+    rail      : 지금 화면 키 ('chat' | 'notes' | 'patch' | 'dashboard' | 'users'
+                | 'claude' | 'storage' | 'system' | 'patch_admin')
     me        : auth.public_user() 결과
     is_admin  : 관리자 여부. 운영 묶음을 서버에서 아예 그리지 않는다.
-                (화면에서 감추는 것만으로 권한을 처리하지 않는다.
-                 /admin/* 는 서버에서도 @admin_required 로 막혀 있다.)
+    menus     : 그 사람이 받은 메뉴 키 목록 (permissions.user_menus 결과).
+                관리자에게는 전부 들어온다.
     rail_menu : true 면 채팅 화면에만 있는 메뉴 항목을 함께 그린다.
-                (내 세션만 보기 / 비밀번호 변경. 둘 다 채팅 화면의 JS 가 쓴다)
 
   바닥 규칙
-    로그아웃은 세 화면 모두 레일에 그대로 보인다. 아바타 메뉴 안에 넣지
-    않는다. 로그인한 자리에서 나가는 길은 찾아 헤매게 만들면 안 된다.
-    아바타 메뉴는 채팅 화면에만 있는 항목(내 세션만 보기, 비밀번호 변경)을
-    담는 용도로만 쓴다. 그 두 개가 없는 화면에서는 메뉴 자체를 만들지 않는다.
+    1. 여기서 항목을 안 그리는 것은 **권한이 아니다.** 주소를 직접 치면
+       들어간다. 실제로 막는 곳은 각 라우트의 menu_required 다. 이 파일은
+       "쓸 수 없는 문을 보여 주지 않는다" 는 친절일 뿐이다.
+    2. 로그아웃은 어느 화면에서든 여기 그대로 보인다. 아바타 메뉴 안에 넣지
+       않는다. 메뉴를 하나도 못 받은 화면에서도 보인다.
 #}
+{% set menu_keys = menus if menus is defined and menus else [] %}
 <nav class="rail" aria-label="주요 메뉴">
 
   <a class="rail-brand" href="/">
@@ -25,21 +26,35 @@
     <span>chat-bot</span>
   </a>
 
+  {% if menu_keys %}
   <div class="rail-group">
     <div class="rail-group-label">작업</div>
 
+    {% if 'chat' in menu_keys %}
     <a class="rail-link{{ ' on' if rail == 'chat' }}" href="/"
        {% if rail == 'chat' %}aria-current="page"{% endif %}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H8l-4 3v-5.5A8 8 0 0 1 12 4h1a8 8 0 0 1 8 8z"/></svg>
       <span>채팅</span>
     </a>
+    {% endif %}
 
+    {% if 'notes' in menu_keys %}
     <a class="rail-link{{ ' on' if rail == 'notes' }}" href="/notes"
        {% if rail == 'notes' %}aria-current="page"{% endif %}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
       <span>메모</span>
     </a>
+    {% endif %}
+
+    {% if 'patch' in menu_keys %}
+    <a class="rail-link{{ ' on' if rail == 'patch' }}" href="/patch"
+       {% if rail == 'patch' %}aria-current="page"{% endif %}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5"/><path d="M12 12v9"/></svg>
+      <span>패치</span>
+    </a>
+    {% endif %}
   </div>
+  {% endif %}
 
   {% if is_admin %}
   <div class="rail-group">
@@ -55,6 +70,12 @@
        {% if rail == 'users' %}aria-current="page"{% endif %}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.5a3 3 0 0 1 0 5"/></svg>
       <span>사용자</span>
+    </a>
+
+    <a class="rail-link{{ ' on' if rail == 'patch_admin' }}" href="/admin/patch"
+       {% if rail == 'patch_admin' %}aria-current="page"{% endif %}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5"/></svg>
+      <span>패치 설정</span>
     </a>
 
     <a class="rail-link{{ ' on' if rail == 'claude' }}" href="/admin/claude"
@@ -74,6 +95,13 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="3"/><path d="M8 20h8"/><path d="M12 16v4"/></svg>
       <span>시스템</span>
     </a>
+  </div>
+  {% endif %}
+
+  {% if not menu_keys and not is_admin %}
+  {# 받은 메뉴가 없다. 그릴 항목도 묶음 제목도 없다. #}
+  <div class="rail-group">
+    <div class="rail-empty">쓸 수 있는 메뉴가 없습니다.</div>
   </div>
   {% endif %}
 
@@ -97,7 +125,7 @@
       </div>
     </div>
     {% else %}
-    {# 메모와 관리자 화면. 열 메뉴가 없으니 누를 수 없는 표시로 둔다 #}
+    {# 열 메뉴가 없는 화면. 누를 수 없는 표시로 둔다 #}
     <div class="rail-user">
       <span class="rail-avatar" aria-hidden="true">{{ (me.display_name or me.username)[:1]|upper }}</span>
       <span class="rail-who">

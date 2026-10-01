@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>패치 · chat-bot</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+/* =========================================================================
+   패치 화면
+   넓은 화면 : [레일 220 | 사이트·제품 트리 260 | 목록]
+   좁은 화면 : 1단. 트리는 위쪽 선택칸으로 접힌다.
+
+   사이트가 하나였다면 탭 몇 개로 끝났다. 여럿이 되면 고르는 자리가 화면의
+   뼈대가 된다. Harbor 가 왼쪽에 프로젝트 목록을 두는 것과 같은 자리다.
+   ========================================================================= */
+html, body { height: 100%; }
+body { overflow: hidden; }
+
+@media (min-width: 900px) {
+  body {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+.shell-main {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#rail-toggle {
+  flex: 0 0 auto;
+  width: 40px; height: 40px;
+  margin-left: -6px;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text);
+  display: grid; place-items: center; cursor: pointer;
+}
+#rail-toggle:hover { background: var(--panel2); }
+#rail-toggle svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+  pointer-events: none;
+}
+
+#alerts:not(:empty) { padding: var(--s3) var(--s5) 0; }
+
+#wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+@media (min-width: 900px) {
+  #wrap { grid-template-columns: 260px minmax(0, 1fr); }
+}
+
+/* ------------------------------------------------------------ 트리 */
+#tree-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s4) var(--s3) var(--s4) var(--s5);
+  background: var(--panel2);
+  overflow: hidden;
+}
+@media (max-width: 899px) {
+  #tree-pane { display: none; }
+  body.tree-open #tree-pane { display: flex; }
+}
+
+#tree-search {
+  flex: none;
+  display: flex; align-items: center; gap: var(--s2);
+  height: 40px; padding: 0 var(--s3);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  box-shadow: var(--sh-card);
+}
+#tree-search svg { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; }
+#tree-search input {
+  flex: 1 1 auto; min-width: 0;
+  border: 0; background: transparent; color: var(--text);
+  font: inherit; font-size: 13.5px; outline: none;
+  box-shadow: none; padding: 0; height: auto; min-height: 0;
+}
+
+#tree { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+.site-row {
+  display: flex; align-items: center; gap: var(--s2);
+  width: 100%; box-sizing: border-box;
+  min-height: 40px; padding: var(--s2) 10px;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text);
+  font: inherit; font-size: 13.5px; font-weight: 600;
+  text-align: left; cursor: pointer;
+}
+.site-row:hover { background: var(--panel); }
+.site-row svg {
+  width: 14px; height: 14px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+  transition: transform .12s ease;
+}
+.site-row[aria-expanded="true"] svg { transform: rotate(90deg); }
+.site-row .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-row .root-tag { font-size: 11px; font-weight: 400; color: var(--muted); }
+
+.prod-row {
+  display: flex; align-items: center;
+  width: calc(100% - 22px); box-sizing: border-box;
+  min-height: 38px; margin-left: 22px; padding: var(--s2) var(--s3);
+  border: 0; border-radius: var(--r-pill);
+  background: transparent; color: var(--text);
+  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.prod-row:hover { background: var(--panel); }
+.prod-row.on { background: var(--accent-soft); color: var(--accent-press); font-weight: 600; }
+
+.tree-note {
+  flex: none;
+  padding: 11px var(--s3);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  font-size: 11.5px; line-height: 1.7; color: var(--muted);
+  text-wrap: balance;
+}
+
+/* ------------------------------------------------------------ 목록 */
+#list-pane {
+  min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; gap: var(--s4);
+  padding: var(--s5) var(--s5) var(--s5) var(--s4);
+  overflow: hidden;
+}
+@media (max-width: 899px) {
+  body.tree-open #list-pane { display: none; }
+  #list-pane { padding: var(--s4); }
+}
+
+.head { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.head h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+.head .where { font-size: 13px; color: var(--muted); }
+.head .spacer { flex: 1 1 auto; }
+.head .when { font-size: 12.5px; color: var(--muted); }
+
+.tools { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+
+.seg {
+  display: flex; gap: 2px; padding: 3px;
+  border-radius: var(--r-pill); background: var(--panel);
+  box-shadow: var(--sh-card);
+}
+.seg button {
+  min-height: 34px; padding: 0 var(--s4);
+  border: 0; border-radius: var(--r-pill);
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.seg button.on { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+
+#mod-search {
+  width: 220px; max-width: 100%;
+  height: 40px; padding: 0 var(--s4);
+  border: 0; border-radius: var(--r-sm);
+  background: var(--panel); color: var(--text);
+  font: inherit; font-size: 13.5px;
+  box-shadow: var(--sh-card);
+}
+
+#board {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overflow-x: auto;
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--sh-card);
+  padding: var(--s2) var(--s3) var(--s3);
+}
+
+table.files { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.files caption {
+  padding: var(--s3) 10px var(--s2);
+  text-align: left; font-size: 12.5px; color: var(--muted);
+  text-wrap: balance;
+}
+table.files th {
+  position: sticky; top: 0; z-index: 1;
+  padding: 10px 10px 12px;
+  text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+table.files td {
+  padding: 11px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+table.files tr:last-child td { border-bottom: 0; }
+table.files td.num { font-variant-numeric: tabular-nums; }
+table.files td.mod { font-weight: 600; }
+table.files td.right { text-align: right; white-space: nowrap; }
+table.files tr.gone td { color: var(--muted); }
+
+.date-group th {
+  background: var(--panel2);
+  color: var(--text);
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  position: static;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-size: 12px; font-weight: 600;
+  white-space: nowrap;
+}
+.badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.badge.gone { background: var(--panel2); color: var(--muted); }
+.badge.sfx { background: var(--panel2); color: var(--muted); font-weight: 400; }
+
+a.dl {
+  display: inline-flex; align-items: center;
+  min-height: 38px; padding: 0 var(--s4);
+  border-radius: var(--r);
+  background: var(--accent); color: var(--on-accent);
+  font-size: 13px; font-weight: 600; text-decoration: none;
+}
+a.dl:hover { background: var(--accent-press); color: var(--on-accent); }
+span.dl-off {
+  display: inline-flex; align-items: center;
+  min-height: 38px; padding: 0 var(--s4);
+  border-radius: var(--r);
+  background: var(--panel2); color: var(--muted);
+  font-size: 13px; font-weight: 600;
+}
+
+.empty {
+  padding: var(--s6) var(--s4);
+  border-radius: var(--r);
+  background: var(--panel2);
+  color: var(--muted);
+  font-size: 13.5px;
+  text-align: center;
+  text-wrap: balance;
+}
+
+@media (pointer: coarse) {
+  .seg button, a.dl, span.dl-off { min-height: var(--tap); }
+  .site-row, .prod-row { min-height: var(--tap); }
+}
+</style>
+</head>
+<body>
+
+{% include "_rail.html" %}
+
+<div class="shell-main">
+
+<header class="top">
+  <button id="rail-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+  </button>
+  <span class="brand">패치</span>
+  <span class="spacer"></span>
+  <button class="btn sm" type="button" id="tree-btn">사이트 고르기</button>
+</header>
+
+<div id="alerts" role="status" aria-live="polite"></div>
+
+<div id="wrap">
+  <aside id="tree-pane" aria-label="사이트와 제품 라인">
+    <label id="tree-search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20"/></svg>
+      <input type="search" id="tree-q" placeholder="사이트 · 제품" aria-label="사이트와 제품 라인 검색" autocomplete="off">
+    </label>
+    <div id="tree"></div>
+    <p class="tree-note">숨긴 사이트와 제품 라인은 여기 안 나옵니다.<br>받을 수 있는 범위만 보입니다.</p>
+  </aside>
+
+  <main id="list-pane">
+    <div class="head">
+      <h1>패치</h1>
+      <span class="where" id="where"></span>
+      <span class="spacer"></span>
+      <span class="when" id="when"></span>
+      <button class="btn sm" type="button" id="refresh">새로고침</button>
+    </div>
+
+    <div class="tools">
+      <div class="seg" role="group" aria-label="보기 방식">
+        <button type="button" id="view-latest" class="on">최신</button>
+        <button type="button" id="view-dates">날짜별</button>
+      </div>
+      <input type="search" id="mod-search" placeholder="모듈 이름" aria-label="모듈 이름 검색" autocomplete="off">
+    </div>
+
+    <div id="board"></div>
+  </main>
+</div>
+
+</div><!-- /.shell-main -->
+
+<script src="/static/rail.js" defer></script>
+<script>
+(function () {
+  "use strict";
+  var CSRF = {{ csrf|tojson }};
+
+  var state = { sites: [], product: null, view: "latest",
+               q: "", treeQ: "", open: {} };
+
+  /* ----------------------------------------------------------- 공통 */
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (k) {
+      if (k === "class") { n.className = props[k]; }
+      else if (k === "text") { n.textContent = props[k]; }
+      else if (k.slice(0, 2) === "on") { n[k] = props[k]; }
+      else if (props[k] !== null && props[k] !== undefined) { n.setAttribute(k, props[k]); }
+    });
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined) { return; }
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+  function clear(n) { while (n.firstChild) { n.removeChild(n.firstChild); } }
+
+  function bytes(n) {
+    if (n === null || n === undefined) { return "-"; }
+    if (n < 1024) { return n + " B"; }
+    if (n < 1048576) { return (n / 1024).toFixed(1) + " KB"; }
+    if (n < 1073741824) { return (n / 1048576).toFixed(1) + " MB"; }
+    return (n / 1073741824).toFixed(2) + " GB";
+  }
+
+  function notify(msg, kind) {
+    var box = document.getElementById("alerts");
+    var n = el("div", { class: "alert " + (kind || "info"), text: msg });
+    clear(box); box.appendChild(n);
+    if (kind !== "error") { setTimeout(function () { if (n.parentNode) { clear(box); } }, 4000); }
+  }
+
+  function api(method, url) {
+    return fetch(url, { method: method, headers: { "X-CSRF-Token": CSRF },
+                        credentials: "same-origin" }).then(function (res) {
+      return res.json().catch(function () {
+        return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+      }).then(function (data) {
+        if (!res.ok) { throw new Error((data && data.error) || ("HTTP " + res.status)); }
+        return data;
+      });
+    });
+  }
+
+  function ago(stamp) {
+    if (!stamp) { return "아직 검사하지 않았습니다"; }
+    var t = Date.parse(stamp.replace(" ", "T"));
+    if (isNaN(t)) { return stamp; }
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) { return "마지막 검사 방금 전"; }
+    if (s < 3600) { return "마지막 검사 " + Math.round(s / 60) + "분 전"; }
+    if (s < 86400) { return "마지막 검사 " + Math.round(s / 3600) + "시간 전"; }
+    return "마지막 검사 " + stamp.slice(0, 10);
+  }
+
+  /* ------------------------------------------------------------ 트리 */
+  function matches(site, product) {
+    var q = state.treeQ.toLowerCase();
+    if (!q) { return true; }
+    if (site.name.toLowerCase().indexOf(q) >= 0) { return true; }
+    if ((site.label || "").toLowerCase().indexOf(q) >= 0) { return true; }
+    if (!product) {
+      return site.products.some(function (p) { return matches(site, p); });
+    }
+    return (product.name + " " + (product.label || "")).toLowerCase().indexOf(q) >= 0;
+  }
+
+  function renderTree() {
+    var box = document.getElementById("tree");
+    clear(box);
+
+    var shown = state.sites.filter(function (s) { return matches(s, null); });
+    if (!shown.length) {
+      box.appendChild(el("div", { class: "empty",
+        text: state.treeQ ? "찾는 이름이 없습니다." :
+              "볼 수 있는 사이트가 없습니다. 관리자에게 요청하세요." }));
+      return;
+    }
+
+    /* 사이트가 하나뿐이면 접는 줄을 그리지 않는다. 쓸데없이 한 겹 더
+       들어가면 매번 펴야 한다. */
+    var single = shown.length === 1;
+
+    shown.forEach(function (s) {
+      var prods = s.products.filter(function (p) { return matches(s, p); });
+      if (!single) {
+        var open = state.open[s.id] !== false;
+        var kids = [
+          el("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" }),
+          el("span", { class: "nm", text: s.label || s.name })
+        ];
+        kids[0].innerHTML = '<path d="M9 6l6 6-6 6"/>';
+        if (s.ambiguous && s.root_label) {
+          kids.push(el("span", { class: "root-tag", text: s.root_label }));
+        }
+        box.appendChild(el("button", {
+          class: "site-row", type: "button", "aria-expanded": open ? "true" : "false",
+          onclick: function () { state.open[s.id] = !open; renderTree(); }
+        }, kids));
+        if (!open) { return; }
+      }
+      prods.forEach(function (p) {
+        var on = state.product && state.product.id === p.id;
+        box.appendChild(el("button", {
+          class: "prod-row" + (on ? " on" : ""), type: "button",
+          onclick: function () { pick(p, s); }
+        }, [p.label || p.name]));
+      });
+      if (!prods.length && !single) {
+        box.appendChild(el("div", { class: "prod-row",
+          style: "color:var(--muted);cursor:default" }, ["제품 라인 없음"]));
+      }
+    });
+  }
+
+  function pick(product, site) {
+    state.product = { id: product.id, name: product.name,
+                      label: product.label, site: site.name };
+    try { localStorage.setItem("patch:last", String(product.id)); } catch (e) {}
+    document.body.classList.remove("tree-open");
+    renderTree();
+    load();
+  }
+
+  /* ------------------------------------------------------------ 목록 */
+  function rowFor(f) {
+    var ver = [el("span", { text: f.version })];
+    if (f.suffix) { ver.push(el("span", { class: "badge sfx", text: f.suffix })); }
+
+    var right;
+    if (f.is_missing) {
+      right = el("span", { class: "dl-off", text: "받을 수 없음" });
+    } else {
+      right = el("a", { class: "dl", href: f.download_url,
+                        download: f.filename,
+                        "aria-label": f.module + " " + f.version + " 다운로드" }, ["다운로드"]);
+    }
+
+    var marks = [];
+    if (f.is_missing) { marks.push(el("span", { class: "badge gone", text: "파일 없음" })); }
+    if (f.content_changed) { marks.push(el("span", { class: "badge warn", text: "내용 변경됨" })); }
+
+    return el("tr", { class: f.is_missing ? "gone" : "" }, [
+      el("td", { class: "mod" }, [f.module_label || f.module]),
+      el("td", { class: "num" }, ver),
+      el("td", { class: "num", text: f.date_at || f.date_dir }),
+      el("td", { class: "num", text: bytes(f.size) }),
+      el("td", {}, marks),
+      el("td", { class: "right" }, [right])
+    ]);
+  }
+
+  function head(cols) {
+    return el("thead", {}, [el("tr", {}, cols.map(function (c) {
+      return el("th", { scope: "col", class: c[1] || "", text: c[0] });
+    }))]);
+  }
+
+  function render(files) {
+    var board = document.getElementById("board");
+    clear(board);
+
+    if (!files.length) {
+      board.appendChild(el("div", { class: "empty",
+        text: state.q ? "찾는 모듈이 없습니다."
+                      : "아직 올라온 패치가 없습니다. 관리자가 모듈을 등록하면 여기 나옵니다." }));
+      return;
+    }
+
+    var table = el("table", { class: "files" });
+    table.appendChild(el("caption", { text: state.view === "latest"
+      ? "모듈마다 가장 높은 버전 한 건입니다. 1.2.14 가 1.2.9 보다 위입니다."
+      : "날짜별로 그날 들어온 파일입니다." }));
+    table.appendChild(head([["모듈"], ["버전"], ["날짜"], ["크기"], ["상태"], ["받기", "right"]]));
+
+    var body = el("tbody");
+    if (state.view === "latest") {
+      files.forEach(function (f) { body.appendChild(rowFor(f)); });
+    } else {
+      var seen = null;
+      files.forEach(function (f) {
+        if (f.date_dir !== seen) {
+          seen = f.date_dir;
+          var label = (f.date_at || f.date_dir) + (f.date_at ? "  ·  " + f.date_dir : "  (날짜를 읽지 못했습니다)");
+          body.appendChild(el("tr", { class: "date-group" },
+            [el("th", { colspan: "6", scope: "colgroup", text: label })]));
+        }
+        body.appendChild(rowFor(f));
+      });
+    }
+    table.appendChild(body);
+    board.appendChild(table);
+  }
+
+  function load() {
+    if (!state.product) {
+      render([]);
+      document.getElementById("where").textContent = "";
+      return;
+    }
+    document.getElementById("where").textContent =
+      state.product.site + " / " + (state.product.label || state.product.name);
+
+    var url = "/api/patch/files?product_id=" + state.product.id;
+    if (state.view === "latest") { url += "&latest=1"; }
+    if (state.q) { url += "&q=" + encodeURIComponent(state.q); }
+    api("GET", url).then(function (d) { render(d.files); })
+      .catch(function (e) { notify(e.message, "error"); });
+  }
+
+  function loadTree() {
+    return api("GET", "/api/patch/tree").then(function (d) {
+      state.sites = d.sites || [];
+      document.getElementById("when").textContent = ago(d.last_scanned_at);
+
+      var want = null;
+      try { want = localStorage.getItem("patch:last"); } catch (e) {}
+      var first = null, chosen = null;
+      state.sites.forEach(function (s) {
+        s.products.forEach(function (p) {
+          if (!first) { first = { p: p, s: s }; }
+          if (want && String(p.id) === want) { chosen = { p: p, s: s }; }
+        });
+      });
+      var startWith = chosen || first;
+      if (startWith) {
+        state.product = { id: startWith.p.id, name: startWith.p.name,
+                          label: startWith.p.label, site: startWith.s.name };
+      }
+      renderTree();
+      load();
+    }).catch(function (e) { notify(e.message, "error"); });
+  }
+
+  /* ------------------------------------------------------------ 묶기 */
+  document.getElementById("view-latest").onclick = function () {
+    state.view = "latest";
+    this.classList.add("on");
+    document.getElementById("view-dates").classList.remove("on");
+    load();
+  };
+  document.getElementById("view-dates").onclick = function () {
+    state.view = "dates";
+    this.classList.add("on");
+    document.getElementById("view-latest").classList.remove("on");
+    load();
+  };
+  document.getElementById("refresh").onclick = function () { loadTree(); };
+
+  var timer = null;
+  document.getElementById("mod-search").oninput = function () {
+    var v = this.value.trim();
+    clearTimeout(timer);
+    timer = setTimeout(function () { state.q = v; load(); }, 200);
+  };
+  document.getElementById("tree-q").oninput = function () {
+    state.treeQ = this.value.trim();
+    renderTree();
+  };
+  document.getElementById("tree-btn").onclick = function () {
+    document.body.classList.toggle("tree-open");
+  };
+
+  loadTree();
+})();
+</script>
+</body>
+</html>

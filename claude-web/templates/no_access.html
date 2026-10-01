@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>사용 권한 없음 · chat-bot</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+/* =========================================================================
+   메뉴를 하나도 받지 못한 사람이 보는 화면.
+
+   빈 화면이나 403 숫자를 띄우지 않는다. 무엇이 없고 누구에게 말하면 되는지
+   한 줄로 적고, 로그아웃 단추를 반드시 둔다.
+   들어왔는데 나갈 길이 없는 화면을 만들면 안 된다.
+   ========================================================================= */
+html, body { height: 100%; }
+body { overflow: hidden; }
+
+@media (min-width: 900px) {
+  body {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+.shell-main {
+  min-width: 0;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--s5);
+  box-sizing: border-box;
+}
+
+.card {
+  width: min(520px, 100%);
+  box-sizing: border-box;
+  padding: 40px 40px 32px;
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--sh-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s4);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.lock {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-pill);
+  background: var(--panel2);
+  display: grid;
+  place-items: center;
+}
+.lock svg {
+  width: 26px; height: 26px;
+  fill: none; stroke: var(--muted); stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+.card h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+.card p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.card .note {
+  margin-top: var(--s2);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+</style>
+</head>
+<body>
+
+{% include "_rail.html" %}
+
+<div class="shell-main">
+  <div class="card">
+    <span class="lock" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+    </span>
+    <h1>아직 사용 권한이 없습니다</h1>
+    <p>관리자에게 메뉴 권한을 요청하세요.<br>권한을 받으면 새로고침만으로 바로 보입니다.</p>
+    <a class="btn primary" href="/logout">로그아웃</a>
+    <p class="note">아이디 {{ me.username }} 으로 로그인되어 있습니다.</p>
+  </div>
+</div>
+
+<script src="/static/rail.js" defer></script>
+</body>
+</html>

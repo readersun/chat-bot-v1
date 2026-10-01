@@ -169,6 +169,32 @@ ALLOWED_NOTE_FILES = {
 STORAGE_CACHE_SECONDS = env_int("STORAGE_CACHE_SECONDS", 60)
 
 # ---------------------------------------------------------------------------
+# 패치 저장소
+# ---------------------------------------------------------------------------
+# 와칭 루트는 반드시 이 디렉터리 아래에 있어야 한다. 관리자가 등록할 때 검사한다.
+#
+# 왜 이런 울타리가 필요한가: 다운로드는 nginx 가 보낸다(아래 X-Accel). nginx 는
+# `location /_patch/ { internal; alias <여기>/; }` 한 줄로 그 아래만 열어 둔다.
+# 울타리가 없으면 루트마다 nginx 설정을 고쳐야 하고, alias 를 / 로 열면 앱의
+# 버그 하나가 파일시스템 전체를 노출한다.
+#
+# 마운트가 /mnt/das, /mnt/das2 처럼 여러 개여도 기본값 /mnt 하나로 덮인다.
+PATCH_BASE_DIR = os.path.abspath(os.getenv("PATCH_BASE_DIR") or "/mnt")
+
+# 다운로드를 nginx 에 넘길지. 운영은 반드시 1 이다.
+#
+# 이 앱은 gunicorn 워커 1개 / 스레드 8개로 돈다. Flask 가 파일을 들고 부르면
+# 3GB tar 다운로드 8개가 스레드를 전부 잡아 채팅과 메모와 로그인까지 멈춘다.
+# 개발 PC 에는 nginx 가 없으므로 0 으로 두고 send_file 로 떨어뜨린다.
+PATCH_XACCEL = env_bool("PATCH_XACCEL", False)
+PATCH_XACCEL_PREFIX = os.getenv("PATCH_XACCEL_PREFIX", "/_patch/")
+
+# 기동 뒤 주기 스캔을 돌릴지. 루트마다 주기는 DB(patch_roots.scan_interval_s)에 있다.
+PATCH_SCAN_ENABLED = env_bool("PATCH_SCAN_ENABLED", True)
+# 주기 스캔 스레드가 "돌 때가 됐나" 를 확인하는 간격.
+PATCH_SCAN_TICK_SECONDS = env_int("PATCH_SCAN_TICK_SECONDS", 60)
+
+# ---------------------------------------------------------------------------
 # 로그인 정책
 # ---------------------------------------------------------------------------
 MIN_PASSWORD_LENGTH = env_int("MIN_PASSWORD_LENGTH", 8)

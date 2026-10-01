@@ -193,6 +193,8 @@
 
       box.appendChild(el("h3", { text: opts.title }));
       if (opts.message) { box.appendChild(el("p", { text: opts.message })); }
+      /* 직접 만든 내용을 넣는 창. 라디오와 체크상자가 섞인 경우에 쓴다. */
+      if (opts.node) { box.appendChild(opts.node); }
       if (opts.input) {
         inp = el("input", {
           type: opts.inputType || "text",
@@ -520,14 +522,19 @@
       ]));
 
       /* 목록 */
-      var rows = d.users.map(function (u) { return userRow(u); });
+      var rows = [];
+      d.users.forEach(function (u) { rows.push(userRow(u, d)); });
       content.appendChild(block("사용자 (" + d.users.length + ")", null, [
-        table(["ID", "아이디", "표시 이름", "권한", "상태", "세션", "마지막 로그인", "작업"], rows)
+        table(["ID", "아이디", "표시 이름", "권한", "메뉴", "패치 사이트",
+               "상태", "작업"], rows),
+        el("p", { class: "muted", style: "margin:12px 2px 0;font-size:12.5px;line-height:1.8" },
+           ["메뉴 체크를 바꾸면 바로 저장됩니다. 착지 화면은 가진 메뉴 중 첫 번째(채팅 → 메모 → 패치)이고, ",
+            "하나도 없으면 안내 화면으로 보냅니다. 관리자는 항상 모든 메뉴를 가집니다."])
       ]));
     });
   }
 
-  function userRow(u) {
+  function userRow(u, all) {
     function patch(body, msg) {
       api("PATCH", "/api/admin/users/" + u.id, body)
         .then(function () { notify(msg); render(); })
@@ -585,16 +592,96 @@
       });
     } }, ["삭제"]);
 
+    /* 메뉴 권한. 관리자는 표와 무관하게 전부 가지므로 켠 채로 잠근다. */
+    var isAdmin = u.role === "admin";
+    var boxes = (all.all_menus || []).map(function (m) {
+      var cb = el("input", { type: "checkbox",
+        "aria-label": u.username + " " + m.label + " 메뉴" });
+      cb.checked = u.menus.indexOf(m.key) >= 0;
+      cb.disabled = isAdmin;
+      cb.onchange = function () {
+        var keys = [];
+        boxes.forEach(function (b, i) {
+          if (b.checked) { keys.push(all.all_menus[i].key); }
+        });
+        api("PUT", "/api/admin/users/" + u.id + "/menus", { menus: keys })
+          .then(function () { notify("메뉴 권한을 바꿨습니다."); render(); })
+          .catch(function (e) { notify(e.message, "error"); render(); });
+      };
+      return cb;
+    });
+    var menuCell = el("div", { class: "row" }, boxes.map(function (cb, i) {
+      return el("label", { class: "row", style: "gap:4px;align-items:center" },
+        [cb, el("span", { style: "font-size:12.5px", text: all.all_menus[i].label })]);
+    }));
+
+    /* 패치 사이트 범위. 고객사가 여럿이면 patch 메뉴 하나로는 모자란다. */
+    var scopeText = isAdmin ? "전체 (관리자)"
+      : (u.patch_all_sites ? "전체" : (u.patch_site_count + "곳"));
+    var scopeBtn = el("button", { class: "btn sm",
+      disabled: (isAdmin || u.menus.indexOf("patch") < 0) ? "disabled" : null,
+      onclick: function () { editScope(u, all); } }, [scopeText]);
+
     return el("tr", {}, [
       el("td", { text: String(u.id) }),
       el("td", { class: "mono", text: u.username }),
       el("td", { class: "wrap", text: u.display_name }),
       el("td", {}, [roleSel]),
+      el("td", {}, [menuCell]),
+      el("td", {}, [scopeBtn]),
       el("td", {}, [badge(u.is_active, u.is_active ? "활성" : "비활성")]),
-      el("td", { text: String(u.session_count) }),
-      el("td", { class: "muted", text: u.last_login_at || "-" }),
       el("td", {}, [el("div", { class: "row" }, [rename, pw, toggle, del])])
     ]);
+  }
+
+  /* 패치 사이트 범위를 고르는 작은 창.
+
+     기본은 전체다. 지금 동작을 바꾸지 않기 위해서다. 다만 숨은 기본값이 되지
+     않게 패치 메뉴를 켠 자리 바로 옆에서 고르게 둔다. 고객사가 서로 다른
+     회사라면 기본을 "고른 사이트만" 으로 뒤집기를 권한다. */
+  function editScope(u, all) {
+    var sites = all.sites || [];
+    var host = document.createElement("div");
+    var radioAll = el("input", { type: "radio", name: "scope", "aria-label": "전체 사이트" });
+    var radioSome = el("input", { type: "radio", name: "scope", "aria-label": "고른 사이트만" });
+    radioAll.checked = !!u.patch_all_sites;
+    radioSome.checked = !u.patch_all_sites;
+
+    var list = el("div", { style: "display:flex;flex-direction:column;gap:6px;margin:10px 0 0 24px" });
+    var boxes = sites.map(function (s) {
+      var cb = el("input", { type: "checkbox", "aria-label": s.name });
+      cb.disabled = radioAll.checked;
+      list.appendChild(el("label", { class: "row", style: "gap:8px;align-items:center" },
+        [cb, el("span", { text: (s.label || s.name) + (s.root_label ? "  (" + s.root_label + ")" : "") })]));
+      return { cb: cb, id: s.id };
+    });
+    function sync() { boxes.forEach(function (b) { b.cb.disabled = radioAll.checked; }); }
+    radioAll.onchange = sync;
+    radioSome.onchange = sync;
+
+    host.appendChild(el("label", { class: "row", style: "gap:8px;align-items:center" },
+      [radioAll, el("span", { text: "전체 사이트" })]));
+    host.appendChild(el("label", { class: "row", style: "gap:8px;align-items:center;margin-top:8px" },
+      [radioSome, el("span", { text: "고른 사이트만" })]));
+    host.appendChild(list);
+    if (!sites.length) {
+      host.appendChild(el("p", { class: "muted", style: "margin:10px 0 0;font-size:12.5px",
+        text: "공개된 사이트가 아직 없습니다. 패치 설정에서 사이트를 켜 주세요." }));
+    }
+
+    /* 현재 선택을 불러온 뒤에 창을 띄운다 */
+    api("GET", "/api/admin/users/" + u.id + "/menus").then(function (d) {
+      boxes.forEach(function (b) { b.cb.checked = d.patch_site_ids.indexOf(b.id) >= 0; });
+      return modal({ title: u.username + " 의 패치 사이트 범위", node: host,
+                     confirmText: "저장" });
+    }).then(function (yes) {
+      if (!yes) { return; }
+      var ids = boxes.filter(function (b) { return b.cb.checked; })
+                     .map(function (b) { return b.id; });
+      return api("PUT", "/api/admin/users/" + u.id + "/menus",
+                 { patch_all_sites: radioAll.checked, patch_site_ids: ids })
+        .then(function () { notify("사이트 범위를 저장했습니다."); render(); });
+    }).catch(function (e) { notify(e.message, "error"); });
   }
 
   /* --------------------------------------------------------- Claude 설정 */

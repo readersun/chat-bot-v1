@@ -277,3 +277,16 @@ body.rail-open .rail-backdrop { display: block; }
 /* 로그아웃. 다른 항목과 같은 줄 모양이지만 지금 위치가 될 일은 없다 */
 .rail-logout { margin-top: var(--s1); color: var(--muted); }
 .rail-logout:hover { background: var(--panel2); color: var(--text); }
+
+/* 메뉴를 하나도 받지 못한 사람의 레일. 그릴 항목이 없을 때만 나온다.
+   묶음 제목도 그리지 않고, 왜 비어 있는지 한 줄만 적는다. */
+.rail-empty {
+  padding: 11px 12px;
+  margin: 0 4px;
+  border-radius: var(--r-sm, 12px);
+  background: var(--panel2);
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+  text-wrap: balance;
+}

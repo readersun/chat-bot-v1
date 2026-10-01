@@ -264,6 +264,7 @@ def limits():
 # ---------------------------------------------------------------------------
 @bp.get("/notes")
 @auth.login_required
+@auth.menu_required("notes")
 def page():
     user = auth.current_user()
     return render_template(
@@ -271,6 +272,7 @@ def page():
         csrf=auth.csrf_token(),
         me=auth.public_user(user),
         is_admin=permissions.is_admin(user),
+        menus=sorted(permissions.user_menus(get_db(), user)),
         rail="notes",          # 왼쪽 레일에서 지금 보고 있는 곳
         limits=limits(),
     )
@@ -321,6 +323,7 @@ def _read_fields(required_title):
 
 @api.get("/notes")
 @auth.login_required
+@auth.menu_required("notes")
 def list_notes():
     """
     scope : all(기본) | mine | shared
@@ -360,6 +363,7 @@ def list_notes():
 
 @api.post("/notes")
 @auth.login_required
+@auth.menu_required("notes")
 def create_note():
     db = get_db()
     user = auth.current_user()
@@ -399,6 +403,7 @@ def create_note():
 
 @api.get("/notes/<int:nid>")
 @auth.login_required
+@auth.menu_required("notes")
 def get_note(nid):
     db = get_db()
     user = auth.current_user()
@@ -409,6 +414,7 @@ def get_note(nid):
 
 @api.patch("/notes/<int:nid>")
 @auth.login_required
+@auth.menu_required("notes")
 def update_note(nid):
     db = get_db()
     user = auth.current_user()
@@ -476,6 +482,7 @@ def update_note(nid):
 
 @api.delete("/notes/<int:nid>")
 @auth.login_required
+@auth.menu_required("notes")
 def delete_note(nid):
     db = get_db()
     user = auth.current_user()
@@ -500,6 +507,7 @@ def delete_note(nid):
 # ---------------------------------------------------------------------------
 @api.get("/note-attachments/<int:aid>")
 @auth.login_required
+@auth.menu_required("notes")
 def get_note_attachment(aid):
     db = get_db()
     user = auth.current_user()
@@ -535,6 +543,7 @@ def get_note_attachment(aid):
 
 @api.delete("/note-attachments/<int:aid>")
 @auth.login_required
+@auth.menu_required("notes")
 def delete_note_attachment(aid):
     db = get_db()
     user = auth.current_user()
@@ -618,6 +627,7 @@ def clean_comment_text(raw):
 
 @api.get("/notes/<int:nid>/comments")
 @auth.login_required
+@auth.menu_required("notes")
 def list_comments(nid):
     db = get_db()
     user = auth.current_user()
@@ -628,6 +638,7 @@ def list_comments(nid):
 
 @api.post("/notes/<int:nid>/comments")
 @auth.login_required
+@auth.menu_required("notes")
 def create_comment(nid):
     db = get_db()
     user = auth.current_user()
@@ -661,6 +672,7 @@ def create_comment(nid):
 
 @api.patch("/note-comments/<int:cid>")
 @auth.login_required
+@auth.menu_required("notes")
 def update_comment(cid):
     db = get_db()
     user = auth.current_user()
@@ -680,6 +692,7 @@ def update_comment(cid):
 
 @api.delete("/note-comments/<int:cid>")
 @auth.login_required
+@auth.menu_required("notes")
 def delete_comment(cid):
     db = get_db()
     user = auth.current_user()

@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>패치 설정 · chat-bot</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+/* =========================================================================
+   패치 설정 (관리자)
+
+   손으로 적는 것은 와칭 루트뿐이다. 사이트와 제품 라인은 스캔이 찾아 넣고
+   여기서는 고르기만 한다. 그래서 두 묶음에는 "추가" 단추가 없다.
+   ========================================================================= */
+html, body { height: 100%; }
+body { overflow: hidden; }
+
+@media (min-width: 900px) {
+  body {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+.shell-main { min-width: 0; height: 100%; display: flex; flex-direction: column; }
+
+#rail-toggle {
+  flex: 0 0 auto; width: 40px; height: 40px; margin-left: -6px;
+  border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--text); display: grid; place-items: center; cursor: pointer;
+}
+#rail-toggle:hover { background: var(--panel2); }
+#rail-toggle svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; pointer-events: none;
+}
+
+#alerts:not(:empty) { padding: var(--s3) var(--s5) 0; }
+
+#page {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: var(--s5);
+  display: flex; flex-direction: column; gap: var(--s4);
+}
+
+.head { display: flex; align-items: baseline; gap: var(--s3); }
+.head h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+.head .spacer { flex: 1 1 auto; }
+
+.tabs { display: flex; gap: var(--s1); flex-wrap: wrap; }
+.tabs button {
+  min-height: 36px; padding: 0 var(--s4);
+  border: 0; border-radius: var(--r-pill);
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 13.5px; cursor: pointer;
+}
+.tabs button.on { background: var(--accent-soft); color: var(--accent-press); font-weight: 600; }
+
+.card {
+  box-sizing: border-box;
+  padding: var(--s4) var(--s5) var(--s3);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--sh-card);
+}
+.card + .card { margin-top: var(--s4); }
+.card-head { display: flex; align-items: center; gap: var(--s3); padding-bottom: var(--s3); flex-wrap: wrap; }
+.card-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.card-head .spacer { flex: 1 1 auto; }
+.card-head .n { font-size: 12.5px; color: var(--muted); }
+
+table.t { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+table.t caption {
+  padding-bottom: var(--s2); text-align: left;
+  font-size: 12.5px; color: var(--muted); text-wrap: balance;
+}
+table.t th {
+  padding: 8px 10px 10px; text-align: left;
+  font-size: 12.5px; font-weight: 600; color: var(--muted);
+  border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+table.t td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.t tr:last-child td { border-bottom: 0; }
+table.t td.right, table.t th.right { text-align: right; }
+table.t td.center, table.t th.center { text-align: center; }
+table.t td.num { font-variant-numeric: tabular-nums; }
+table.t td.strong { font-weight: 600; }
+.wrap-x { overflow-x: auto; }
+
+.badge { display: inline-block; padding: 3px 10px; border-radius: var(--r-pill);
+         font-size: 12px; font-weight: 600; white-space: nowrap; }
+.badge.ok { background: var(--ok-bg); color: var(--ok-fg); }
+.badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.badge.bad { background: var(--error-bg); color: var(--error-fg); }
+.badge.mute { background: var(--panel2); color: var(--muted); }
+
+.form-row { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > span { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.field input, .field select { min-width: 140px; }
+.field.grow { flex: 1 1 240px; }
+.field.grow input { width: 100%; }
+
+.hint { margin: var(--s3) 0 0; font-size: 12.5px; line-height: 1.8; color: var(--muted); text-wrap: balance; }
+.box { box-sizing: border-box; padding: var(--s3) var(--s4); border-radius: var(--r); background: var(--panel2); }
+.box.ok { background: var(--ok-bg); color: var(--ok-fg); }
+.box.bad { background: var(--error-bg); color: var(--error-fg); }
+.box.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.box p { margin: 0; font-size: 12.5px; line-height: 1.8; white-space: pre-wrap; }
+
+.two { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4); }
+@media (min-width: 1100px) { .two { grid-template-columns: minmax(0, 1fr) 360px; } }
+
+dl.kv { margin: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 6px 10px; font-size: 13px; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+
+.empty { padding: var(--s5) var(--s4); border-radius: var(--r); background: var(--panel2);
+         color: var(--muted); font-size: 13.5px; text-align: center; text-wrap: balance; }
+
+.inline { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+</style>
+</head>
+<body>
+
+{% include "_rail.html" %}
+
+<div class="shell-main">
+
+<header class="top">
+  <button id="rail-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+  </button>
+  <span class="brand">{{ page_title }}</span>
+  <span class="spacer"></span>
+</header>
+
+<div id="alerts" role="status" aria-live="polite"></div>
+
+<div id="page">
+  <div class="head"><h1>패치 설정</h1><span class="spacer"></span></div>
+  <div class="tabs" id="tabs" role="group" aria-label="설정 묶음"></div>
+  <div id="body"></div>
+</div>
+
+</div><!-- /.shell-main -->
+
+<script src="/static/rail.js" defer></script>
+<script>
+(function () {
+  "use strict";
+  var CSRF = {{ csrf|tojson }};
+
+  var TABS = [["roots", "와칭 루트"], ["sites", "사이트"], ["products", "제품 라인"],
+              ["modules", "모듈"], ["rules", "버전 규칙"], ["scan", "스캔"]];
+  var state = { tab: "roots", data: null, productId: null, test: null, scans: [],
+                unmatched: [] };
+
+  /* ----------------------------------------------------------- 공통 */
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (k) {
+      if (k === "class") { n.className = props[k]; }
+      else if (k === "text") { n.textContent = props[k]; }
+      else if (k === "value") { n.value = props[k]; }
+      else if (k === "checked") { n.checked = !!props[k]; }
+      else if (k.slice(0, 2) === "on") { n[k] = props[k]; }
+      else if (props[k] !== null && props[k] !== undefined) { n.setAttribute(k, props[k]); }
+    });
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined) { return; }
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+  function clear(n) { while (n.firstChild) { n.removeChild(n.firstChild); } }
+
+  function bytes(n) {
+    if (n === null || n === undefined) { return "-"; }
+    if (n < 1048576) { return (n / 1024).toFixed(1) + " KB"; }
+    if (n < 1073741824) { return (n / 1048576).toFixed(1) + " MB"; }
+    return (n / 1073741824).toFixed(2) + " GB";
+  }
+
+  function notify(msg, kind) {
+    var box = document.getElementById("alerts");
+    clear(box);
+    box.appendChild(el("div", { class: "alert " + (kind || "info"), text: msg }));
+    if (kind !== "error") { setTimeout(function () { clear(box); }, 4000); }
+  }
+
+  function api(method, url, body) {
+    var opt = { method: method, headers: { "X-CSRF-Token": CSRF },
+                credentials: "same-origin" };
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    return fetch(url, opt).then(function (res) {
+      return res.json().catch(function () {
+        return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+      }).then(function (d) {
+        if (!res.ok) { throw new Error((d && d.error) || ("HTTP " + res.status)); }
+        return d;
+      });
+    });
+  }
+
+  function ago(stamp) {
+    if (!stamp) { return "없음"; }
+    var t = Date.parse(stamp.replace(" ", "T"));
+    if (isNaN(t)) { return stamp; }
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) { return "방금 전"; }
+    if (s < 3600) { return Math.round(s / 60) + "분 전"; }
+    if (s < 86400) { return Math.round(s / 3600) + "시간 전"; }
+    return stamp.slice(5, 16);
+  }
+
+  /* 날짜 형식 고르는 칸. 목록에 없으면 직접 입력 칸이 함께 열린다. */
+  function dateFormatPicker(value, onchange) {
+    var presets = (state.data && state.data.date_presets) || [];
+    var custom = presets.indexOf(value) < 0;
+    var sel = el("select", { "aria-label": "날짜 형식" },
+      presets.map(function (p) {
+        return el("option", { value: p, text: p, selected: (!custom && p === value) ? "selected" : null });
+      }).concat([el("option", { value: "__custom__", text: "직접 입력",
+                                selected: custom ? "selected" : null })]));
+    var box = el("input", { type: "text", value: custom ? value : "",
+                            placeholder: "YYYY.MM.DD", "aria-label": "날짜 형식 직접 입력",
+                            style: "width:130px" });
+    box.hidden = !custom;
+
+    function fire() {
+      var v = sel.value === "__custom__" ? box.value.trim() : sel.value;
+      if (v) { onchange(v); }
+    }
+    sel.onchange = function () {
+      box.hidden = sel.value !== "__custom__";
+      if (sel.value === "__custom__") { box.focus(); } else { fire(); }
+    };
+    box.onchange = fire;
+    return el("div", { class: "inline" }, [sel, box]);
+  }
+
+  function toggle(label, on, onchange) {
+    var i = el("input", { type: "checkbox", checked: on, "aria-label": label });
+    i.onchange = function () { onchange(i.checked); };
+    return i;
+  }
+
+  function btn(text, kind, fn) {
+    return el("button", { class: "btn " + (kind || "") + " sm", type: "button",
+                          text: text, onclick: fn });
+  }
+
+  function reload(msg) {
+    return api("GET", "/api/admin/patch/overview").then(function (d) {
+      state.data = d;
+      if (msg) { notify(msg); }
+      render();
+    }).catch(function (e) { notify(e.message, "error"); });
+  }
+
+  /* --------------------------------------------------------- 와칭 루트 */
+  function viewRoots() {
+    var d = state.data, box = el("div");
+
+    var rows = d.roots.map(function (r) {
+      var status = r.last_error
+        ? el("span", { class: "badge bad", text: "읽을 수 없음" })
+        : el("span", { class: "badge ok", text: r.scan_enabled ? "정상" : "검사 꺼짐" });
+      return el("tr", {}, [
+        el("td", { class: "strong" }, [el("code", { class: "mono", text: r.path })]),
+        el("td", {}, [el("input", { type: "text", value: r.label || "",
+                                    placeholder: "표시 이름", style: "width:120px",
+                                    "aria-label": "표시 이름",
+                                    onchange: function (e) {
+                                      save(r.id, { label: e.target.value });
+                                    } })]),
+        el("td", {}, [el("input", { type: "number", value: r.scan_interval_s, min: "60",
+                                    step: "60", style: "width:92px",
+                                    "aria-label": "검사 주기(초)",
+                                    onchange: function (e) {
+                                      save(r.id, { scan_interval_s: parseInt(e.target.value, 10) || 600 });
+                                    } })]),
+        el("td", {}, [dateFormatPicker(r.date_format, function (v) {
+          save(r.id, { date_format: v });
+        })]),
+        el("td", { class: "num", text: String(r.site_count) }),
+        el("td", { text: ago(r.last_scanned_at) }),
+        el("td", {}, [status]),
+        el("td", { class: "right" }, [
+          btn("경로 확인", "", function () { check(r.path); }),
+          " ",
+          btn("삭제", "danger", function () { removeRoot(r); })
+        ])
+      ]);
+    });
+
+    var table = el("table", { class: "t" }, [
+      el("caption", { text: "손으로 적는 것은 이 표뿐입니다. 사이트와 제품 라인은 스캔이 찾아 넣습니다." }),
+      el("thead", {}, [el("tr", {}, ["경로", "표시 이름", "주기(초)", "날짜 형식 기본값",
+                                     "사이트", "마지막 검사", "상태", ""].map(function (h, i) {
+        return el("th", { class: i === 7 ? "right" : "", text: h });
+      }))]),
+      el("tbody", {}, rows.length ? rows : [
+        el("tr", {}, [el("td", { colspan: "8" }, [
+          el("div", { class: "empty", text: "등록된 와칭 루트가 없습니다. 아래에서 추가하세요." })])])])
+    ]);
+
+    var card = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "와칭 루트" }),
+        el("span", { class: "n", text: d.roots.length + "개" })
+      ]),
+      el("div", { class: "wrap-x" }, [table])
+    ]);
+
+    var bad = d.roots.filter(function (r) { return r.last_error; });
+    if (bad.length) {
+      card.appendChild(el("div", { class: "box bad", style: "margin-top:12px" },
+        bad.map(function (r) { return el("p", { text: r.path + " — " + r.last_error }); })));
+      card.appendChild(el("p", { class: "hint",
+        text: "읽을 수 없는 루트는 그 루트만 멈춥니다. 나머지 루트는 평소대로 돌고, 색인도 지워지지 않습니다." }));
+    }
+
+    /* 추가 폼 */
+    var pathIn = el("input", { type: "text", placeholder: d.base_dir + "/patch", style: "width:100%" });
+    var labelIn = el("input", { type: "text", placeholder: "표시 이름 (선택)" });
+    var fmt = { v: "YYMMDD" };
+    var result = el("div", { class: "box", hidden: "hidden" });
+
+    var addCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h2", { text: "루트 추가" })]),
+      el("div", { class: "form-row" }, [
+        el("label", { class: "field grow" }, [el("span", { text: "경로" }), pathIn]),
+        el("label", { class: "field" }, [el("span", { text: "표시 이름" }), labelIn]),
+        el("label", { class: "field" }, [el("span", { text: "날짜 형식" }),
+          dateFormatPicker("YYMMDD", function (v) { fmt.v = v; })]),
+        btn("경로 확인", "", function () { check(pathIn.value, result); }),
+        el("button", { class: "btn primary", type: "button", text: "추가",
+          onclick: function () {
+            api("POST", "/api/admin/patch/roots",
+                { path: pathIn.value, label: labelIn.value, date_format: fmt.v })
+              .then(function () { pathIn.value = ""; labelIn.value = "";
+                                  reload("루트를 등록했습니다. 검사를 돌리면 사이트가 보입니다."); })
+              .catch(function (e) { notify(e.message, "error"); });
+          } })
+      ]),
+      result,
+      el("p", { class: "hint",
+        text: "경로는 " + d.base_dir + " 아래에 있어야 합니다. 다운로드는 nginx 가 이 디렉터리 아래만 내보냅니다."
+              + (d.xaccel ? "" : "  (지금은 개발 모드라 Flask 가 직접 내보냅니다)") })
+    ]);
+
+    box.appendChild(card);
+    box.appendChild(addCard);
+    return box;
+  }
+
+  function check(path, into) {
+    api("POST", "/api/admin/patch/roots/check", { path: path }).then(function (d) {
+      if (into) {
+        into.hidden = false;
+        into.className = "box " + (d.ok ? "ok" : "bad");
+        clear(into);
+        into.appendChild(el("p", { text: d.message }));
+      } else {
+        notify(d.message, d.ok ? "info" : "error");
+      }
+    }).catch(function (e) { notify(e.message, "error"); });
+  }
+
+  function save(id, patch) {
+    api("PATCH", "/api/admin/patch/roots/" + id, patch)
+      .then(function () { reload("저장했습니다."); })
+      .catch(function (e) { notify(e.message, "error"); });
+  }
+
+  function removeRoot(r) {
+    if (!window.confirm("와칭 루트 " + r.path + " 의 색인을 지웁니다.\n"
+                        + "DAS 의 파일은 그대로 남습니다. 계속할까요?")) { return; }
+    api("DELETE", "/api/admin/patch/roots/" + r.id)
+      .then(function (d) { reload(d.note); })
+      .catch(function (e) { notify(e.message, "error"); });
+  }
+
+  /* ----------------------------------------------------------- 사이트 */
+  function viewSites() {
+    var d = state.data;
+    var rows = d.sites.map(function (s) {
+      return el("tr", {}, [
+        el("td", {}, [el("code", { class: "mono", text: s.root_path })]),
+        el("td", { class: "strong", text: s.name }),
+        el("td", {}, [el("input", { type: "text", value: s.label || "", placeholder: "표시 이름",
+          style: "width:130px", "aria-label": s.name + " 표시 이름",
+          onchange: function (e) { patchSite(s.id, { label: e.target.value }); } })]),
+        el("td", { class: "num", text: String(s.product_count) }),
+        el("td", {}, [dateFormatPicker(s.date_format, function (v) {
+          patchSite(s.id, { date_format: v }, "날짜 형식을 바꿨습니다. 다시 검사하면 반영됩니다.");
+        })]),
+        el("td", { class: "center" }, [toggle(s.name + " 공개", s.is_visible, function (on) {
+          patchSite(s.id, { is_visible: on });
+        })])
+      ]);
+    });
+
+    var hidden = d.sites.filter(function (s) { return !s.is_visible; }).length;
+    return el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "발견된 사이트" }),
+        hidden ? el("span", { class: "badge warn", text: "숨김 " + hidden }) : null
+      ]),
+      el("div", { class: "wrap-x" }, [el("table", { class: "t" }, [
+        el("caption", { text: "스캔이 찾아 넣습니다. 새로 발견된 것은 숨김으로 들어오고, 켜야 사용자에게 보입니다." }),
+        el("thead", {}, [el("tr", {}, ["루트", "폴더 이름", "표시 이름", "제품 라인",
+                                       "날짜 형식", "공개"].map(function (h, i) {
+          return el("th", { class: i === 5 ? "center" : "", text: h });
+        }))]),
+        el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "6" }, [
+          el("div", { class: "empty", text: "아직 발견된 사이트가 없습니다. 스캔 묶음에서 검사를 돌려 보세요." })])])])
+      ])]),
+      el("p", { class: "hint",
+        text: "날짜 형식은 루트의 기본값을 물려받습니다. 형식과 안 맞는 폴더도 버리지 않고 목록 맨 뒤에 남습니다." })
+    ]);
+  }
+
+  function patchSite(id, patch, msg) {
+    api("PATCH", "/api/admin/patch/sites/" + id, patch)
+      .then(function () { reload(msg || "저장했습니다."); })
+      .catch(function (e) { notify(e.message, "error"); });
+  }
+
+  /* ------------------------------------------------------- 제품 라인 */
+  function viewProducts() {
+    var d = state.data;
+    var rows = d.products.map(function (p) {
+      var ruleSel = el("select", { "aria-label": p.name + " 기본 버전 규칙" },
+        [el("option", { value: "", text: "(기본 규칙)" })].concat(
+          d.rules.map(function (r) {
+            return el("option", { value: String(r.id), text: r.name,
+              selected: p.version_rule_id === r.id ? "selected" : null });
+          })));
+      ruleSel.onchange = function () {
+        api("PATCH", "/api/admin/patch/products/" + p.id,
+            { version_rule_id: ruleSel.value ? parseInt(ruleSel.value, 10) : null })
+          .then(function () { reload("저장했습니다."); })
+          .catch(function (e) { notify(e.message, "error"); });
+      };
+      return el("tr", {}, [
+        el("td", { text: p.site_name }),
+        el("td", { class: "strong", text: p.name }),
+        el("td", {}, [el("input", { type: "text", value: p.label || "", placeholder: "표시 이름",
+          style: "width:130px", "aria-label": p.name + " 표시 이름",
+          onchange: function (e) {
+            api("PATCH", "/api/admin/patch/products/" + p.id, { label: e.target.value })
+              .then(function () { reload("저장했습니다."); })
+              .catch(function (er) { notify(er.message, "error"); });
+          } })]),
+        el("td", {}, [ruleSel]),
+        el("td", { class: "num", text: String(p.module_count) }),
+        el("td", { class: "num" }, [p.unmatched_count
+          ? el("span", { class: "badge warn", text: String(p.unmatched_count) })
+          : document.createTextNode("0")]),
+        el("td", { class: "center" }, [toggle(p.name + " 공개", p.is_visible, function (on) {
+          api("PATCH", "/api/admin/patch/products/" + p.id, { is_visible: on })
+            .then(function () { reload("저장했습니다."); })
+            .catch(function (e) { notify(e.message, "error"); });
+        })])
+      ]);
+    });
+
+    return el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h2", { text: "발견된 제품 라인" })]),
+      el("div", { class: "wrap-x" }, [el("table", { class: "t" }, [
+        el("caption", { text: "사이트가 공개돼 있어도 제품 라인을 켜야 사용자에게 보입니다." }),
+        el("thead", {}, [el("tr", {}, ["사이트", "폴더 이름", "표시 이름", "기본 버전 규칙",
+                                       "모듈", "미매칭", "공개"].map(function (h, i) {
+          return el("th", { class: i >= 4 ? (i === 6 ? "center" : "right") : "", text: h });
+        }))]),
+        el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "7" }, [
+          el("div", { class: "empty", text: "아직 발견된 제품 라인이 없습니다." })])])])
+      ])])
+    ]);
+  }
+
+  /* ----------------------------------------------------------- 모듈 */
+  function productSelect(onchange) {
+    var d = state.data;
+    var sel = el("select", { "aria-label": "제품 라인" },
+      d.products.map(function (p) {
+        return el("option", { value: String(p.id),
+          text: p.site_name + " / " + p.name,
+          selected: state.productId === p.id ? "selected" : null });
+      }));
+    sel.onchange = function () { onchange(parseInt(sel.value, 10)); };
+    return sel;
+  }
+
+  function viewModules() {
+    var d = state.data;
+    if (!d.products.length) {
+      return el("div", { class: "card" }, [el("div", { class: "empty",
+        text: "제품 라인이 아직 없습니다. 와칭 루트를 등록하고 검사를 돌려 보세요." })]);
+    }
+    if (!state.productId) { state.productId = d.products[0].id; }
+
+    var listBox = el("div", { class: "wrap-x" }, [el("div", { class: "empty", text: "불러오는 중..." })]);
+    var nameIn = el("input", { type: "text", placeholder: "face", "aria-label": "모듈 이름" });
+
+    function loadModules() {
+      api("GET", "/api/admin/patch/modules?product_id=" + state.productId).then(function (r) {
+        clear(listBox);
+        var rows = r.modules.map(function (m) {
+          var ruleSel = el("select", { "aria-label": m.name + " 버전 규칙" },
+            [el("option", { value: "", text: "(제품 라인 기본값)" })].concat(
+              d.rules.map(function (rr) {
+                return el("option", { value: String(rr.id), text: rr.name,
+                  selected: m.version_rule_id === rr.id ? "selected" : null });
+              })));
+          ruleSel.onchange = function () {
+            api("PATCH", "/api/admin/patch/modules/" + m.id,
+                { version_rule_id: ruleSel.value ? parseInt(ruleSel.value, 10) : null })
+              .then(function () { loadModules(); notify("저장했습니다."); })
+              .catch(function (e) { notify(e.message, "error"); });
+          };
+          return el("tr", {}, [
+            el("td", { class: "strong", text: m.name }),
+            el("td", {}, [el("input", { type: "text", value: m.label || "", placeholder: "표시 이름",
+              style: "width:130px", "aria-label": m.name + " 표시 이름",
+              onchange: function (e) {
+                api("PATCH", "/api/admin/patch/modules/" + m.id, { label: e.target.value })
+                  .then(function () { notify("저장했습니다."); })
+                  .catch(function (er) { notify(er.message, "error"); });
+              } })]),
+            el("td", {}, [ruleSel]),
+            el("td", { class: "num", text: String(m.file_count) }),
+            el("td", { class: "right" }, [btn("삭제", "danger", function () {
+              if (!window.confirm("모듈 " + m.name + " 을(를) 지웁니다.\n"
+                  + "그 모듈로 잡혔던 파일은 매칭 안 된 목록으로 돌아갑니다.\n"
+                  + "DAS 의 파일은 그대로 남습니다. 계속할까요?")) { return; }
+              api("DELETE", "/api/admin/patch/modules/" + m.id)
+                .then(function (res) { loadModules(); reload(res.note); })
+                .catch(function (e) { notify(e.message, "error"); });
+            })])
+          ]);
+        });
+        listBox.appendChild(el("table", { class: "t" }, [
+          el("caption", { text: "이름은 파일 앞부분과 글자 그대로 같아야 합니다. 대소문자도 같습니다." }),
+          el("thead", {}, [el("tr", {}, ["이름", "표시 이름", "버전 규칙", "파일", ""].map(
+            function (h, i) { return el("th", { class: i === 4 ? "right" : (i === 3 ? "right" : ""), text: h }); }))]),
+          el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "5" }, [
+            el("div", { class: "empty",
+              text: "등록된 모듈이 없습니다. 스캔 묶음의 '매칭 안 된 파일' 에서 한 번에 등록할 수 있습니다." })])])])
+        ]));
+      }).catch(function (e) { notify(e.message, "error"); });
+    }
+
+    var copySel = productSelect(function () {});
+    copySel.setAttribute("aria-label", "복사해 올 제품 라인");
+
+    var card = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "모듈" }),
+        el("label", { class: "inline" }, [
+          el("span", { class: "n", text: "제품 라인" }),
+          productSelect(function (id) { state.productId = id; render(); })
+        ]),
+        el("span", { class: "spacer" }),
+        el("label", { class: "inline" }, [
+          el("span", { class: "n", text: "복사해 올 곳" }), copySel,
+          btn("모듈 복사", "", function () {
+            api("POST", "/api/admin/patch/modules/copy",
+                { from_product_id: parseInt(copySel.value, 10), to_product_id: state.productId })
+              .then(function (r) {
+                loadModules();
+                notify("모듈 " + r.copied + "개를 복사했습니다. (이미 있던 " + r.skipped + "개는 건너뜀)");
+              }).catch(function (e) { notify(e.message, "error"); });
+          })
+        ])
+      ]),
+      el("div", { class: "form-row", style: "padding-bottom:12px" }, [
+        el("label", { class: "field" }, [el("span", { text: "모듈 이름" }), nameIn]),
+        el("button", { class: "btn primary", type: "button", text: "모듈 추가",
+          onclick: function () {
+            api("POST", "/api/admin/patch/modules",
+                { product_id: state.productId, name: nameIn.value })
+              .then(function () { nameIn.value = ""; loadModules(); reload("모듈을 등록했습니다."); })
+              .catch(function (e) { notify(e.message, "error"); });
+          } })
+      ]),
+      listBox
+    ]);
+
+    loadModules();
+    return el("div", { class: "two" }, [card, testPanel()]);
+  }
+
+  /* ----------------------------------------------- 파일명 / 날짜 테스트 */
+  function testPanel() {
+    var fileIn = el("input", { type: "text", value: "stt_unified_1.0.0.tar",
+                               "aria-label": "파일 이름", style: "width:100%" });
+    var dateIn = el("input", { type: "text", value: "260923",
+                               "aria-label": "날짜 폴더 이름", style: "width:100%" });
+    var fmtIn = el("input", { type: "text", value: "YYMMDD",
+                              "aria-label": "날짜 형식", style: "width:100%" });
+    var out = el("div");
+
+    function run() {
+      api("POST", "/api/admin/patch/parse-test", {
+        product_id: state.productId, filename: fileIn.value.trim(),
+        date_dir: dateIn.value.trim(), date_format: fmtIn.value.trim()
+      }).then(function (d) {
+        clear(out);
+        if (d.file) {
+          if (d.file.matched) {
+            out.appendChild(el("div", { class: "box ok" }, [
+              el("p", { text: "잡힙니다." }),
+              el("dl", { class: "kv" }, [
+                el("dt", { text: "모듈" }), el("dd", { text: d.file.module }),
+                el("dt", { text: "버전" }), el("dd", { text: d.file.version }),
+                el("dt", { text: "접미사" }), el("dd", { text: d.file.suffix || "없음" }),
+                el("dt", { text: "정렬 키" }), el("dd", { text: d.file.version_sort })
+              ])
+            ]));
+          } else {
+            var kids = [el("p", { text: "안 잡힙니다. " + d.file.why })];
+            if (d.file.candidate) {
+              kids.push(el("p", { text: "모듈 이름 후보: " + d.file.candidate }));
+            }
+            out.appendChild(el("div", { class: "box warn" }, kids));
+          }
+        }
+        if (d.date) {
+          out.appendChild(el("div", { class: "box " + (d.date.matched ? "ok" : "warn"),
+                                      style: "margin-top:12px" }, [
+            el("p", { text: d.date.matched ? "날짜: " + d.date.parsed : d.date.why })
+          ]));
+        }
+      }).catch(function (e) { notify(e.message, "error"); });
+    }
+
+    return el("aside", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h2", { text: "읽기 테스트" })]),
+      el("p", { class: "hint", style: "margin-top:0" },
+        ["파일 이름과 날짜 폴더가 어떻게 읽히는지 바로 보여 줍니다.",
+         el("br"), "목록이 비었을 때 이유를 찾는 자리입니다."]),
+      el("label", { class: "field", style: "margin-bottom:10px" },
+        [el("span", { text: "파일 이름" }), fileIn]),
+      el("label", { class: "field", style: "margin-bottom:10px" },
+        [el("span", { text: "날짜 폴더" }), dateIn]),
+      el("label", { class: "field", style: "margin-bottom:10px" },
+        [el("span", { text: "날짜 형식" }), fmtIn]),
+      el("button", { class: "btn primary", type: "button", text: "확인", onclick: run,
+                     style: "margin-bottom:12px" }),
+      out,
+      el("p", { class: "hint",
+        text: "긴 이름이 먼저 맞춰집니다. stt 와 stt_unified 가 함께 등록돼 있으면 stt_unified 가 이깁니다." })
+    ]);
+  }
+
+  /* ------------------------------------------------------- 버전 규칙 */
+  function viewRules() {
+    var d = state.data;
+    var rows = d.rules.map(function (r) {
+      return el("tr", {}, [
+        el("td", { class: "strong" }, [
+          document.createTextNode(r.name), " ",
+          r.is_builtin ? el("span", { class: "badge mute", text: "내장" }) : null
+        ]),
+        el("td", {}, [el("code", { class: "mono", text: r.pattern })]),
+        el("td", { text: r.sort_kind === "numeric" ? "숫자" : "글자" }),
+        el("td", {}, [el("code", { class: "mono", text: r.sample })]),
+        el("td", { class: "right" }, [btn("삭제", "danger", function () {
+          if (!window.confirm("버전 규칙 " + r.name + " 을(를) 지웁니다.")) { return; }
+          api("DELETE", "/api/admin/patch/version-rules/" + r.id)
+            .then(function () { reload("지웠습니다."); })
+            .catch(function (e) { notify(e.message, "error"); });
+        })])
+      ]);
+    });
+
+    var nameIn = el("input", { type: "text", placeholder: "semver2" });
+    var patIn = el("input", { type: "text", placeholder: "^(\\d+)\\.(\\d+)$", style: "width:100%" });
+    var sampleIn = el("input", { type: "text", placeholder: "1.2" });
+    var kindSel = el("select", { "aria-label": "정렬 방식" }, [
+      el("option", { value: "numeric", text: "숫자 (1.2.14 > 1.2.9)" }),
+      el("option", { value: "lexical", text: "글자" })
+    ]);
+
+    return el("div", {}, [
+      el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [el("h2", { text: "버전 규칙" })]),
+        el("div", { class: "wrap-x" }, [el("table", { class: "t" }, [
+          el("thead", {}, [el("tr", {}, ["이름", "정규식", "정렬", "샘플", ""].map(function (h, i) {
+            return el("th", { class: i === 4 ? "right" : "", text: h }); }))]),
+          el("tbody", {}, rows)
+        ])])
+      ]),
+      el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [el("h2", { text: "규칙 추가" })]),
+        el("div", { class: "form-row" }, [
+          el("label", { class: "field" }, [el("span", { text: "이름" }), nameIn]),
+          el("label", { class: "field grow" }, [el("span", { text: "정규식" }), patIn]),
+          el("label", { class: "field" }, [el("span", { text: "샘플 버전" }), sampleIn]),
+          el("label", { class: "field" }, [el("span", { text: "정렬" }), kindSel]),
+          el("button", { class: "btn primary", type: "button", text: "추가",
+            onclick: function () {
+              api("POST", "/api/admin/patch/version-rules", {
+                name: nameIn.value, pattern: patIn.value,
+                sample: sampleIn.value, sort_kind: kindSel.value
+              }).then(function () {
+                nameIn.value = patIn.value = sampleIn.value = "";
+                reload("규칙을 등록했습니다.");
+              }).catch(function (e) { notify(e.message, "error"); });
+            } })
+        ]),
+        el("p", { class: "hint",
+          text: "샘플 버전은 반드시 넣어야 합니다. 저장 전에 그 샘플이 실제로 잡히는지 확인합니다. "
+                + "잘못된 정규식 하나가 제품 라인 전체를 빈 목록으로 만드는 것을 막는 유일한 장치입니다." })
+      ])
+    ]);
+  }
+
+  /* ------------------------------------------------------------ 스캔 */
+  function viewScan() {
+    var d = state.data;
+    var rootSel = el("select", { "aria-label": "검사할 루트" },
+      [el("option", { value: "", text: "전체 (" + d.roots.length + "개)" })].concat(
+        d.roots.map(function (r) { return el("option", { value: String(r.id), text: r.path }); })));
+
+    var histBox = el("div", { class: "wrap-x" });
+    var unBox = el("div");
+
+    function loadScans() {
+      api("GET", "/api/admin/patch/scans").then(function (r) {
+        clear(histBox);
+        var rows = r.scans.map(function (s) {
+          var result = s.error
+            ? el("span", { class: "badge bad", text: s.error })
+            : (s.held ? el("span", { class: "badge warn", text: "복사 중 " + s.held + "건 보류" })
+                      : el("span", { class: "badge ok", text: "성공" }));
+          return el("tr", {}, [
+            el("td", { class: "num", text: (s.started_at || "").slice(5, 16) }),
+            el("td", {}, [el("code", { class: "mono", text: s.root_path || "-" })]),
+            el("td", { text: s.trigger_kind === "manual" ? "수동" : "주기" }),
+            el("td", { class: "num right", text: String(s.added) }),
+            el("td", { class: "num right", text: String(s.updated) }),
+            el("td", { class: "num right", text: String(s.missing) }),
+            el("td", { class: "num right", text: String(s.held) }),
+            el("td", { class: "num right", text: String(s.unmatched) }),
+            el("td", {}, [result])
+          ]);
+        });
+        histBox.appendChild(el("table", { class: "t" }, [
+          el("thead", {}, [el("tr", {}, ["시각", "루트", "방식", "추가", "갱신", "사라짐",
+                                         "보류", "미매칭", "결과"].map(function (h, i) {
+            return el("th", { class: (i >= 3 && i <= 7) ? "right" : "", text: h }); }))]),
+          el("tbody", {}, rows.length ? rows : [el("tr", {}, [el("td", { colspan: "9" }, [
+            el("div", { class: "empty", text: "아직 검사 기록이 없습니다." })])])])
+        ]));
+      }).catch(function (e) { notify(e.message, "error"); });
+    }
+
+    function loadUnmatched() {
+      api("GET", "/api/admin/patch/unmatched").then(function (r) {
+        clear(unBox);
+        if (!r.files.length) {
+          unBox.appendChild(el("div", { class: "empty",
+            text: "매칭 안 된 파일이 없습니다. 모든 tar 가 등록된 모듈과 맞습니다." }));
+          return;
+        }
+        /* 같은 제품 라인 안에서 같은 후보 이름끼리 묶는다. 한 모듈이 버전만
+           여럿인 경우가 많아서, 줄마다 체크하면 같은 이름을 몇 번씩 누르게 된다. */
+        var groups = {};
+        r.files.forEach(function (f) {
+          var key = f.product_id + " " + f.candidate;
+          if (!groups[key]) {
+            groups[key] = { product_id: f.product_id, candidate: f.candidate,
+                            site: f.site_name, product: f.product_name, files: [] };
+          }
+          groups[key].files.push(f);
+        });
+
+        Object.keys(groups).forEach(function (k) {
+          var g = groups[k];
+          var nameIn = el("input", { type: "text", value: g.candidate, style: "width:180px",
+                                     "aria-label": "등록할 모듈 이름" });
+          unBox.appendChild(el("div", { class: "box", style: "margin-bottom:10px" }, [
+            el("div", { class: "inline" }, [
+              el("strong", { text: g.site + " / " + g.product }),
+              el("span", { class: "n", text: g.files.length + "건" }),
+              el("span", { class: "spacer", style: "flex:1 1 auto" }),
+              nameIn,
+              el("button", { class: "btn primary sm", type: "button", text: "모듈로 등록",
+                onclick: function () {
+                  api("POST", "/api/admin/patch/unmatched/register",
+                      { product_id: g.product_id, names: [nameIn.value] })
+                    .then(function (res) {
+                      loadUnmatched(); loadScans();
+                      reload("모듈 " + (res.registered.join(", ") || "-")
+                             + " 을(를) 등록하고 다시 검사했습니다.");
+                    }).catch(function (e) { notify(e.message, "error"); });
+                } })
+            ]),
+            el("p", { style: "margin:8px 0 0;font-size:12px;color:var(--muted)",
+                      text: g.files.slice(0, 4).map(function (f) { return f.filename; }).join("  ·  ")
+                            + (g.files.length > 4 ? "  외 " + (g.files.length - 4) + "건" : "") })
+          ]));
+        });
+      }).catch(function (e) { notify(e.message, "error"); });
+    }
+
+    var box = el("div", {}, [
+      el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [
+          el("h2", { text: "검사" }),
+          el("label", { class: "inline" }, [el("span", { class: "n", text: "루트" }), rootSel]),
+          el("span", { class: "spacer" }),
+          el("button", { class: "btn primary", type: "button", text: "지금 검사",
+            onclick: function (e) {
+              var b = e.target;
+              b.disabled = true; b.textContent = "검사 중...";
+              api("POST", "/api/admin/patch/scan",
+                  rootSel.value ? { root_id: parseInt(rootSel.value, 10) } : {})
+                .then(function (r) {
+                  var add = 0, upd = 0, errs = [];
+                  r.results.forEach(function (x) {
+                    add += x.added; upd += x.updated;
+                    if (x.error) { errs.push(x.error); }
+                  });
+                  loadScans(); loadUnmatched();
+                  reload("검사 완료. 추가 " + add + "건, 갱신 " + upd + "건."
+                         + (errs.length ? "  오류 " + errs.length + "건은 아래 기록을 보세요." : ""));
+                })
+                .catch(function (er) { notify(er.message, "error"); })
+                .then(function () { b.disabled = false; b.textContent = "지금 검사"; });
+            } })
+        ]),
+        el("p", { class: "hint", style: "margin-top:0",
+          text: "한 번에 하나씩, 오래 안 돈 루트부터 순서대로 돕니다. 한 루트가 죽어도 나머지는 돕니다." })
+      ]),
+      el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [el("h2", { text: "최근 검사" })]),
+        histBox
+      ]),
+      el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [el("h2", { text: "매칭 안 된 파일" })]),
+        el("p", { class: "hint", style: "margin-top:0",
+          text: "등록된 모듈과 맞지 않아 버전 관리에 들어가지 못한 tar 입니다. 새 모듈이 들어왔다는 신호입니다." }),
+        unBox
+      ])
+    ]);
+
+    loadScans();
+    loadUnmatched();
+    return box;
+  }
+
+  /* ----------------------------------------------------------- 묶기 */
+  function render() {
+    var tabs = document.getElementById("tabs");
+    clear(tabs);
+    TABS.forEach(function (t) {
+      tabs.appendChild(el("button", {
+        class: state.tab === t[0] ? "on" : "", type: "button", text: t[1],
+        "aria-current": state.tab === t[0] ? "true" : null,
+        onclick: function () { state.tab = t[0]; render(); }
+      }));
+    });
+
+    var body = document.getElementById("body");
+    clear(body);
+    if (!state.data) { body.appendChild(el("div", { class: "empty", text: "불러오는 중..." })); return; }
+
+    var view = { roots: viewRoots, sites: viewSites, products: viewProducts,
+                 modules: viewModules, rules: viewRules, scan: viewScan }[state.tab];
+    body.appendChild(view());
+  }
+
+  render();
+  reload();
+})();
+</script>
+</body>
+</html>
