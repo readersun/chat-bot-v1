@@ -253,6 +253,7 @@ def page():
         csrf=auth.csrf_token(),
         me=auth.public_user(user),
         is_admin=permissions.is_admin(user),
+        rail="notes",          # 왼쪽 레일에서 지금 보고 있는 곳
         limits=limits(),
     )
 

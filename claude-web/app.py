@@ -31,6 +31,7 @@ Project = 그룹핑(관리자가 관리), Session = 접근 권한 단위(소유�
 """
 
 import getpass
+import mimetypes
 import os
 import shutil
 import sys
@@ -53,6 +54,11 @@ import settings_store
 from db import (
     audit, backup_database, close_db, connect, get_db, migrate, row_to_dict, ts,
 )
+
+# woff2 는 파이썬 표준 mimetypes 표에 없다. 리눅스에서는 /etc/mime.types 가
+# 채워 주지만 python:slim 계열 이미지에는 그 파일이 없어서 글꼴이
+# application/octet-stream 으로 나간다. 직접 등록해 둔다.
+mimetypes.add_type("font/woff2", ".woff2")
 
 BASE_DIR = config.BASE_DIR
 UPLOAD_DIR = config.UPLOAD_DIR
@@ -419,13 +425,39 @@ def after(resp):
     return resp
 
 
+# 오류 화면의 큰 제목. 상태 코드 숫자만 크게 띄우지 않고 무슨 일이 생겼는지
+# 한 문장으로 적는다. 사과하지 않고 다음에 할 일만 말한다.
+ERROR_TITLES = {
+    400: "요청을 이해하지 못했습니다",
+    403: "볼 수 있는 권한이 없습니다",
+    404: "찾을 수 없는 주소입니다",
+    405: "이 방법으로는 열 수 없습니다",
+    413: "보낸 파일이 너무 큽니다",
+    429: "요청이 너무 잦습니다",
+    500: "서버에 문제가 생겼습니다",
+    502: "서버에 연결하지 못했습니다",
+    503: "지금은 서비스를 쓸 수 없습니다",
+}
+
+
+def error_title(code):
+    return ERROR_TITLES.get(code, "요청을 처리하지 못했습니다")
+
+
 @app.errorhandler(HTTPException)
 def handle_http_error(exc):
     if auth.wants_json() or request.path.startswith("/api/"):
         return jsonify(ok=False, error=exc.description), exc.code
     if exc.code == 401:
         return redirect(url_for("auth.login", next=request.path))
-    return render_template("error.html", code=exc.code, message=exc.description), exc.code
+    # abort(403, "직접 쓴 설명") 처럼 우리가 넣은 문장만 화면에 보여 준다.
+    # 넣지 않았다면 exc.description 에는 werkzeug 기본 영어 문장이 들어 있어서,
+    # 그대로 두면 한국어 화면 한가운데에 영어 안내가 크게 뜬다.
+    detail = exc.description
+    if detail == getattr(type(exc), "description", None):
+        detail = ""
+    return render_template("error.html", code=exc.code,
+                           title=error_title(exc.code), message=detail), exc.code
 
 
 @app.errorhandler(Exception)
@@ -433,8 +465,8 @@ def handle_error(exc):  # pragma: no cover
     app.logger.exception("unhandled error")
     if auth.wants_json() or request.path.startswith("/api/"):
         return jsonify(ok=False, error="서버 내부 오류가 발생했습니다."), 500
-    return render_template("error.html", code=500,
-                           message="서버 내부 오류가 발생했습니다."), 500
+    return render_template("error.html", code=500, title=error_title(500),
+                           message=""), 500
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +481,9 @@ def index():
         csrf=auth.csrf_token(),
         me=auth.public_user(user),
         is_admin=permissions.is_admin(user),
+        # 왼쪽 레일용. rail_menu 는 이 화면에만 있는 아바타 메뉴를 그리라는 뜻이다.
+        rail="chat",
+        rail_menu=True,
         max_images=config.MAX_IMAGES_PER_MESSAGE,
         max_upload_mb=config.MAX_UPLOAD_MB,
         allowed_ext=sorted(config.ALLOWED_IMAGES),

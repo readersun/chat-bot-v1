@@ -817,7 +817,9 @@ curl -fsS http://127.0.0.1/health
 | `static/*` | 반영됨 (매 요청 파일을 읽는다) | 반영됨 |
 
 `static/` 을 고쳤고 PWA 캐시를 무효화해야 하면 `static/sw.js` 의 `VERSION`
-문자열(`claude-web-v3`)을 올린 뒤 재시작한다.
+문자열(`claude-web-v5`)을 올린 뒤 재시작한다.
+`shared.css` / `type.css` / `fonts/` 는 서비스워커의 `SHELL` 목록에 있어서,
+버전을 올리지 않으면 이미 방문한 브라우저에 예전 화면이 그대로 남는다.
 
 ### 15-B. requirements.txt / 런타임이 바뀐 경우
 

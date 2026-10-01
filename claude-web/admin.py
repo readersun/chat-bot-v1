@@ -38,6 +38,28 @@ api = Blueprint("admin_api", __name__, url_prefix="/api/admin")
 
 TABS = ("dashboard", "users", "claude", "system", "storage")
 
+# 화면 제목. 왼쪽 레일의 항목 이름과 같아야 지금 어디에 있는지 헷갈리지 않는다.
+TAB_TITLES = {
+    "dashboard": "현황",
+    "users": "사용자",
+    "claude": "Claude 설정",
+    "system": "시스템",
+    "storage": "저장공간",
+}
+
+
+def _page(tab):
+    """관리자 화면 하나를 그린다. 레일에 필요한 값을 함께 넘긴다."""
+    return render_template(
+        "admin.html",
+        tab=tab,
+        page_title=TAB_TITLES[tab],
+        me=public_user(current_user()),
+        # 이 블루프린트는 통째로 @admin_required 다. 여기에 도달했다면 관리자다.
+        is_admin=True,
+        rail=tab,
+    )
+
 
 # ---------------------------------------------------------------------------
 # 화면
@@ -45,7 +67,7 @@ TABS = ("dashboard", "users", "claude", "system", "storage")
 @bp.get("/")
 @admin_required
 def home():
-    return render_template("admin.html", tab="dashboard")
+    return _page("dashboard")
 
 
 @bp.get("/<tab>")
@@ -53,7 +75,7 @@ def home():
 def tab_page(tab):
     if tab not in TABS:
         abort(404, "없는 페이지입니다.")
-    return render_template("admin.html", tab=tab)
+    return _page(tab)
 
 
 # ---------------------------------------------------------------------------

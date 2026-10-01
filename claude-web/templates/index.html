@@ -15,27 +15,55 @@
 <meta name="apple-mobile-web-app-title" content="Claude Web">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#202126" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
 <link rel="icon" href="/static/icons/icon-192.png" sizes="192x192">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
+
 <style>
 /* =========================================================================
+   채팅 화면 스타일
+
+   이 화면의 골격
+     본문(대화)이 화면 전체를 쓴다. 프로젝트와 세션 목록은 왼쪽에서 덮고
+     지나가는 서랍이다. 좁은 화면과 넓은 화면의 구조가 같다. 예전에는
+     1200px 을 넘으면 3단으로 갈라져서 같은 화면을 두 벌 관리해야 했다.
+
+   표정의 원칙 (shared.css 와 같다)
+     1. 테두리로 칸을 나누지 않는다. 흰 면과 옅은 두 겹 그림자로 층을 만든다.
+     2. 모서리는 12 / 18 / 24. 칩과 배지와 아바타는 완전한 원.
+     3. 말풍선은 한쪽 모서리만 6 으로 줄여 방향을 준다.
+     4. 굵기는 600 까지만. 700 은 한글 획이 뭉쳐 딱딱해진다.
+     5. 글자를 대문자로 바꾸지 않는다.
+     6. 그림자는 세 갈래(카드 / 떠 있는 것 / 덮는 것)만 쓴다.
+
+   대화 방향은 예전 버전과 같다. 보낸 사람은 오른쪽, Claude 는 왼쪽이다.
+
    1. 토큰
    ========================================================================= */
 :root {
   /* 레이아웃 */
-  --project-w: 240px;
-  --session-w: 280px;
-  --nav-w: 300px;
-  --header-h: 56px;
-  --composer-max: 168px;
+  --nav-w: 400px;
+  --header-h: 60px;
+  --composer-max: 172px;
   --line-max: 860px;
-  --radius: 12px;
-  --radius-sm: 8px;
-  --tap: 44px;              /* 최소 터치 타겟 */
+  --r-sm: 12px;
+  --r: 18px;
+  --r-lg: 24px;
+  --r-pill: 999px;
+  --tap: 46px;              /* 최소 터치 타겟 */
   --app-h: 100dvh;          /* JS 가 visualViewport 높이로 덮어쓴다 */
+
+  /* 여백 단계. 6 / 8 / 12 / 16 / 20 / 24 만 쓴다 */
+  --s1: 6px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
 
   /* 안전 영역 */
   --sa-top: env(safe-area-inset-top, 0px);
@@ -43,21 +71,33 @@
   --sa-left: env(safe-area-inset-left, 0px);
   --sa-right: env(safe-area-inset-right, 0px);
 
-  /* 색 */
-  --bg: #f7f7f8;
+  /* 색. shared.css 와 같은 값을 쓴다 */
+  --bg: #eff3f6;
   --panel: #ffffff;
-  --panel2: #fbfbfc;
-  --border: #e3e3e6;
-  --text: #1f2024;
-  --muted: #6b6f76;
-  --user-bg: #e8f0fe;
-  --code-bg: #f3f3f5;
-  --accent: #3d5afe;
-  --accent-soft: #eaeeff;
-  --error-bg: #fdecec;
-  --error-fg: #a11414;
-  --danger: #c62828;
-  --shadow: 0 8px 28px rgba(0, 0, 0, .18);
+  --panel2: #f6f8fa;
+  --line: #b4bfc9;
+  --border: #dde4ea;
+  --text: #1f2933;
+  --muted: #5a6772;
+  --user-bg: #e4edf7;
+  --code-bg: #f1f4f7;
+  --track: #cfdce8;
+  --accent: #2f6ba8;
+  --accent-press: #255788;
+  --accent-soft: #e4edf7;
+  /* 채워진 강조색/위험색 위에 올리는 글자색.
+     밝은 화면에서는 흰 글씨지만, 어두운 화면에서는 바탕색이 밝아져서
+     흰 글씨를 얹으면 대비가 2:1 근처까지 떨어진다. 그때는 먹 글씨를 쓴다. */
+  --on-accent: #ffffff;
+  --on-danger: #ffffff;
+  --error-bg: #fbefef;
+  --error-fg: #a83232;
+  --danger: #a83232;
+
+  --sh-card: 0 1px 2px rgba(31, 41, 51, .04), 0 6px 18px rgba(31, 41, 51, .05);
+  --sh-float: 0 2px 4px rgba(31, 41, 51, .05), 0 10px 30px rgba(31, 41, 51, .08);
+  --sh-modal: 0 8px 24px rgba(31, 41, 51, .10), 0 24px 64px rgba(31, 41, 51, .16);
+  --shadow: var(--sh-modal);
 }
 
 @supports not (height: 100dvh) {
@@ -66,20 +106,28 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17181c;
-    --panel: #202126;
-    --panel2: #1b1c21;
-    --border: #32343b;
-    --text: #e8e8ea;
-    --muted: #9aa0a8;
-    --user-bg: #26354f;
-    --code-bg: #15161a;
-    --accent: #7c8cff;
-    --accent-soft: #2a2f4a;
-    --error-bg: #3a1f1f;
-    --error-fg: #ff9c9c;
-    --danger: #ef5350;
-    --shadow: 0 8px 28px rgba(0, 0, 0, .5);
+    --bg: #14181c;
+    --panel: #1d2328;
+    --panel2: #191e23;
+    --line: #3a444d;
+    --border: #2b333a;
+    --text: #e7ecf0;
+    --muted: #a3afb9;
+    --user-bg: #253645;
+    --code-bg: #151a1f;
+    --track: #2f3e4b;
+    --accent: #86b2de;
+    --accent-press: #a6c8e9;
+    --accent-soft: #253645;
+    --on-accent: #12171c;
+    --on-danger: #12171c;
+    --error-bg: #35201f;
+    --error-fg: #f09a9a;
+    --danger: #ef6b6b;
+
+    --sh-card: 0 1px 2px rgba(0, 0, 0, .30), 0 6px 18px rgba(0, 0, 0, .28);
+    --sh-float: 0 2px 4px rgba(0, 0, 0, .34), 0 10px 30px rgba(0, 0, 0, .38);
+    --sh-modal: 0 8px 24px rgba(0, 0, 0, .44), 0 24px 64px rgba(0, 0, 0, .52);
   }
 }
 
@@ -99,11 +147,18 @@ html, body {
 body {
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR",
-        "Apple SD Gothic Neo", "Malgun Gothic", Roboto, sans-serif;
+  /* Pretendard 는 static/type.css 가 담아 온다. 그 파일을 못 받아 와도
+     이 목록이 남아 있어서 본문이 세리프로 떨어지지 않는다. */
+  font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+               system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
 }
+
+h1, h2, h3 { letter-spacing: -.005em; font-weight: 600; }
 
 img, svg, video { max-width: 100%; height: auto; }
 button, input, textarea { font: inherit; color: inherit; }
@@ -118,7 +173,7 @@ button { cursor: pointer; }
 [hidden] { display: none !important; }
 
 /* =========================================================================
-   3. 앱 셸 — 모바일 우선 (단일 컬럼 + 드로어)
+   3. 앱 셸 — 본문 한 칸 + 덮고 지나가는 서랍
    ========================================================================= */
 #app {
   height: var(--app-h);
@@ -127,36 +182,62 @@ button { cursor: pointer; }
   overflow: hidden;
 }
 
+/* 넓은 화면에서는 왼쪽 레일이 한 칸을 차지한다.
+   좁은 화면에서는 레일이 position: fixed 서랍이라 칸을 먹지 않는다.
+   (모양은 static/rail.css 에 있다) */
+@media (min-width: 900px) {
+  #app { grid-template-columns: 220px minmax(0, 1fr); }
+}
+
+/* 세션 판을 열었을 때 본문 위에 덮는 그늘. 레일은 덮지 않는다.
+   레일은 어디로 갈 수 있는지를 알려 주는 곳이라 항상 또렷해야 한다. */
 #backdrop {
   display: none;
   position: fixed;
   inset: 0;
   z-index: 39;
-  background: rgba(0, 0, 0, .45);
+  background: rgba(20, 28, 36, .38);
+}
+@media (min-width: 900px) {
+  #backdrop { left: 220px; }
 }
 body.nav-open #backdrop { display: block; }
 
-/* ---- 내비게이션 (모바일: 드로어) ---- */
+/* ---- 세션 판 ----
+   오른쪽에서 본문 위로 떠오르는 둥근 판이다. 화면 가장자리에 붙이지 않고
+   사방을 띄워서, 덮고 지나가는 것이지 새 화면이 아니라는 걸 보이게 한다.
+   왼쪽 레일은 덮지 않는다. */
 #nav {
   position: fixed;
-  top: 0;
-  bottom: 0;
-  left: 0;
+  top: var(--s3);
+  bottom: var(--s3);
+  right: var(--s3);
+  left: var(--s3);            /* 좁은 화면 : 거의 화면 전체 */
   z-index: 40;
-  width: min(86vw, 400px);
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--panel2);
-  border-right: 1px solid var(--border);
-  box-shadow: var(--shadow);
-  transform: translateX(-101%);
-  transition: transform .22s ease;
+  background: var(--panel);
+  border-right: 0;
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-modal);
+  transform: translateX(105%);
+  transition: transform .24s cubic-bezier(.32, .72, 0, 1);
   padding-top: var(--sa-top);
   padding-bottom: var(--sa-bottom);
-  padding-left: var(--sa-left);
+  overflow: hidden;
 }
 body.nav-open #nav { transform: translateX(0); }
+
+@media (min-width: 900px) {
+  #nav {
+    left: auto;
+    width: var(--nav-w);
+    top: 14px;
+    bottom: 14px;
+    right: 14px;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   #nav { transition: none; }
@@ -166,40 +247,45 @@ body.nav-open #nav { transform: translateX(0); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--s2);
   height: var(--header-h);
   flex: 0 0 auto;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border);
-  font-weight: 700;
+  padding: 0 var(--s3) 0 var(--s5);
+  border-bottom: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -.005em;
 }
 
-/* 두 패널을 드로어 안에 세로로 쌓는다 */
+/* 두 칸을 서랍 안에 세로로 쌓는다.
+   구분선을 긋지 않고 여백과 작은 제목으로만 나눈다. */
 .pane {
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
 }
-#projects { flex: 0 0 auto; max-height: 45%; border-bottom: 1px solid var(--border); }
+#projects { flex: 0 0 auto; max-height: 42%; border-bottom: 0; }
 #sessions { flex: 1 1 auto; }
 
 .pane-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--s2);
   flex: 0 0 auto;
-  padding: 10px 12px;
-  /* 버튼이 숨겨지는 일반 사용자 화면에서도 두 칼럼 높이가 같아야 한다 */
-  min-height: 57px;
+  padding: var(--s3) var(--s3) var(--s2) var(--s5);
+  /* 버튼이 숨겨지는 일반 사용자 화면에서도 두 칸의 제목 높이가 같아야 한다 */
+  min-height: 52px;
 }
+/* 예전에는 11px 대문자에 자간을 벌려 놓았다. 한글에는 대문자가 없어서
+   효과는 없고 글자만 작아졌다. 읽을 수 있는 크기의 소문자로 되돌린다. */
 .pane-head h2 {
   margin: 0;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .06em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--muted);
 }
 .pane-list {
@@ -207,29 +293,48 @@ body.nav-open #nav { transform: translateX(0); }
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 6px 8px;
+  padding: 0 var(--s3) var(--s3);
   -webkit-overflow-scrolling: touch;
 }
 .pane-empty {
   color: var(--muted);
-  font-size: 13px;
-  padding: 12px 10px;
-  line-height: 1.7;
+  font-size: 13.5px;
+  padding: var(--s3) var(--s2);
+  line-height: 1.75;
+}
+
+/* 세션 목록의 날짜 묶음 제목 */
+.pane-day {
+  padding: var(--s3) var(--s3) var(--s1);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.pane-list > .pane-day:first-child { padding-top: var(--s1); }
+
+/* 세션 항목 오른쪽의 마지막 시각 */
+.item .when {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--s1);
   min-height: var(--tap);
-  padding: 6px 8px;
+  padding: var(--s1) var(--s2) var(--s1) var(--s3);
   margin-bottom: 2px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r);
   cursor: pointer;
   min-width: 0;
+  transition: background-color .14s ease;
 }
-.item:hover { background: var(--accent-soft); }
-.item.active { background: var(--accent-soft); font-weight: 600; }
+.item:hover { background: var(--panel2); }
+.item.active { background: var(--accent-soft); font-weight: 600; color: var(--accent-press); }
 .item .label {
   flex: 1 1 auto;
   min-width: 0;
@@ -239,11 +344,15 @@ body.nav-open #nav { transform: translateX(0); }
 }
 .item .count {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 .item .acts { display: flex; gap: 2px; flex: 0 0 auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .item { transition: none; }
+}
 
 .icon-btn {
   border: 0;
@@ -251,42 +360,60 @@ body.nav-open #nav { transform: translateX(0); }
   color: var(--muted);
   font-size: 13px;
   line-height: 1;
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-pill);
   display: grid;
   place-items: center;
+  transition: background-color .14s ease, color .14s ease;
 }
-.icon-btn svg, #attach-btn svg, #send svg {
-  width: 17px; height: 17px;
+.icon-btn svg, #attach-btn svg, #send svg, #menu-toggle svg {
+  width: 18px; height: 18px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.9;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
 }
-.icon-btn svg { width: 15px; height: 15px; }
+.icon-btn svg { width: 16px; height: 16px; }
 #send svg { width: 19px; height: 19px; }
-.icon-btn:hover { background: var(--border); color: var(--text); }
-.icon-btn.danger:hover { background: var(--danger); color: #fff; }
+.icon-btn:hover { background: var(--panel2); color: var(--text); }
+.icon-btn.danger:hover { background: var(--error-bg); color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn { transition: none; }
+}
 
 .btn {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
-  padding: 7px 12px;
-  min-height: 34px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--panel);
+  line-height: 1.2;
+  padding: 0 var(--s4);
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s1);
+  border-radius: var(--r);
+  border: 0;
+  background: var(--panel2);
   color: var(--text);
   white-space: nowrap;
+  transition: background-color .14s ease, color .14s ease;
 }
-.btn:hover { border-color: var(--accent); color: var(--accent); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover { color: #fff; opacity: .9; }
-.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
-.btn:disabled { opacity: .5; cursor: default; }
+.btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-press); }
+.btn.primary { background: var(--accent); color: var(--on-accent); }
+.btn.primary:hover:not(:disabled) { background: var(--accent-press); color: var(--on-accent); }
+/* 위험한 동작은 빨간 글씨가 아니라 옅은 붉은 면으로 알린다.
+   글자색만 바꾸면 색을 구별하지 못하는 사람에게는 신호가 되지 않는다. */
+.btn.danger { background: var(--error-bg); color: var(--danger); }
+.btn.danger:hover:not(:disabled) { background: var(--danger); color: var(--on-danger); }
+.btn:disabled { opacity: .45; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+}
 
 /* =========================================================================
    4. 대화 영역
@@ -304,35 +431,75 @@ body.nav-open #nav { transform: translateX(0); }
   overflow: hidden;
 }
 
+/* 머리 부분에 밑줄을 긋지 않는다. 바닥이 옅은 청색이라 흰 면만으로 층이 보인다 */
 #chat-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--s2);
   min-height: var(--header-h);
-  padding: 0 12px;
+  padding: 0 var(--s4);
   padding-top: var(--sa-top);
-  padding-right: max(12px, var(--sa-right));
+  padding-right: max(var(--s4), var(--sa-right));
+  padding-left: max(var(--s3), var(--sa-left));
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0;
 }
+
+/* 세션 판을 여는 단추. 넓은 화면에서도 계속 보인다. 목록이 항상 덮고
+   지나가는 구조이므로 이 단추가 목록으로 가는 유일한 길이다.
+   그래서 맨 아이콘이 아니라 "세션" 이라고 적어 둔다. */
 #menu-toggle {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  border-radius: var(--r-pill);
+  border: 0;
+  background: var(--panel2);
+  color: var(--accent-press);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color .14s ease, color .14s ease;
+}
+#menu-toggle:hover { background: var(--accent-soft); }
+
+/* 좁은 화면에서 왼쪽 레일 서랍을 여는 단추 */
+#rail-toggle {
   flex: 0 0 auto;
   width: var(--tap);
   height: var(--tap);
-  font-size: 18px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  border: 0;
   background: var(--panel2);
+  color: var(--text);
   display: grid;
   place-items: center;
+  transition: background-color .14s ease, color .14s ease;
 }
+#rail-toggle:hover { background: var(--accent-soft); color: var(--accent-press); }
+#rail-toggle svg {
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #menu-toggle, #rail-toggle { transition: none; }
+}
+
 .titles { min-width: 0; flex: 1 1 auto; }
 #chat-title {
   display: flex;
   align-items: center;
   min-width: 0;
-  font-size: 15px;
+  font-size: 15.5px;
   font-weight: 600;
+  letter-spacing: -.005em;
 }
 /* 이름만 줄임표 처리한다. 공개범위 배지는 길이와 상관없이 항상 보여야 한다 */
 #chat-title .tname {
@@ -342,7 +509,8 @@ body.nav-open #nav { transform: translateX(0); }
   white-space: nowrap;
 }
 #chat-sub {
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -355,7 +523,7 @@ body.nav-open #nav { transform: translateX(0); }
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
-  padding: 14px 12px;
+  padding: var(--s5) var(--s4);
 }
 .wrap {
   max-width: var(--line-max);
@@ -363,47 +531,87 @@ body.nav-open #nav { transform: translateX(0); }
   min-width: 0;
 }
 
+/* ---- 한 덩어리의 대화 ----
+   [아바타][말풍선] 을 한 줄에 놓고 그 아래에 누가 언제 말했는지를 적는다.
+   보낸 사람 쪽은 같은 줄을 뒤집어서 아바타가 오른쪽으로 간다. */
 .msg {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  margin-bottom: 16px;
+  margin-bottom: var(--s5);
   min-width: 0;
+  max-width: 100%;
 }
 .msg.user { align-items: flex-end; }
-.msg .role { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 
+.msg .line {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s2);
+  min-width: 0;
+  max-width: 100%;
+}
+.msg.user .line { flex-direction: row-reverse; max-width: 84%; }
+
+.msg .av {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-pill);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+.msg.assistant .av { background: var(--accent); color: var(--on-accent); }
+.msg.user .av { background: var(--track); color: var(--text); }
+.msg.error .av { background: var(--error-bg); color: var(--error-fg); }
+
+.msg .role {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-top: var(--s1);
+  padding-left: 40px;
+}
+.msg.user .role { padding-left: 0; padding-right: 40px; }
+
+/* 말풍선. 한쪽 모서리만 6 으로 줄여서 어느 쪽에서 온 말인지 표시한다 */
 .bubble {
   max-width: 100%;
   min-width: 0;
-  padding: 10px 14px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
+  padding: 14px var(--s5);
+  border: 0;
+  border-radius: var(--r) var(--r) var(--r) var(--s1);
   background: var(--panel);
+  box-shadow: var(--sh-card);
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 .msg.user .bubble {
-  max-width: 88%;
   background: var(--user-bg);
-  border-color: transparent;
+  box-shadow: none;
+  border-radius: var(--r) var(--r) var(--s1) var(--r);
+  padding: 13px var(--s5);
 }
 .msg.error .bubble {
   background: var(--error-bg);
   color: var(--error-fg);
-  border-color: transparent;
+  box-shadow: none;
 }
 
-.bubble p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bubble p { margin: 0 0 var(--s2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .bubble p:last-child { margin-bottom: 0; }
 
-/* 긴 코드/로그는 말풍선 안에서만 가로 스크롤 */
+/* 긴 코드나 로그는 말풍선 안에서만 가로로 스크롤한다 */
 .bubble pre {
   max-width: 100%;
-  margin: 8px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  margin: var(--s3) 0;
+  padding: var(--s3) var(--s4);
+  border: 0;
+  border-radius: var(--r-sm);
   background: var(--code-bg);
   overflow-x: auto;
   overflow-y: hidden;
@@ -412,26 +620,49 @@ body.nav-open #nav { transform: translateX(0); }
 .bubble pre code {
   display: block;
   white-space: pre;
-  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
 }
 
-.thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+/* 날짜 구분. 대화가 길어지면 언제 오간 말인지 알 수 없다.
+   선을 긋지 않고 가운데 알약 하나만 둔다. */
+.day {
+  display: flex;
+  justify-content: center;
+  margin: var(--s2) 0 var(--s5);
+}
+.day span {
+  padding: 5px var(--s4);
+  border-radius: var(--r-pill);
+  background: var(--track);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.thumbs { display: flex; flex-wrap: wrap; gap: var(--s1); margin-bottom: var(--s2); }
 .thumbs img {
-  width: clamp(84px, 26vw, 120px);
-  height: clamp(84px, 26vw, 120px);
+  width: clamp(88px, 26vw, 124px);
+  height: clamp(88px, 26vw, 124px);
   object-fit: cover;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--r-sm);
   background: var(--code-bg);
   cursor: zoom-in;
 }
-.meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.meta {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-top: 2px;
+  padding-left: 40px;
+}
 
 .typing .dot {
   display: inline-block;
-  width: 6px; height: 6px;
-  margin-right: 3px;
-  border-radius: 50%;
+  width: 7px; height: 7px;
+  margin-right: 4px;
+  border-radius: var(--r-pill);
   background: var(--muted);
   animation: blink 1.2s infinite;
 }
@@ -441,65 +672,83 @@ body.nav-open #nav { transform: translateX(0); }
 @media (prefers-reduced-motion: reduce) { .typing .dot { animation: none; } }
 
 /* =========================================================================
-   5. 입력창
+   5. 입력창 — 바닥에 떠 있는 판
    ========================================================================= */
+/* 감싸는 칸은 색을 칠하지 않는다. 테두리도 없다. 실제로 보이는 것은
+   안쪽의 둥근 판 하나다. */
 #composer-wrap {
-  background: var(--panel);
-  border-top: 1px solid var(--border);
-  padding: 8px 12px;
-  padding-left: max(12px, var(--sa-left));
-  padding-right: max(12px, var(--sa-right));
-  padding-bottom: calc(8px + var(--sa-bottom));
+  background: transparent;
+  border-top: 0;
+  padding: var(--s2) var(--s4) 0;
+  padding-left: max(var(--s4), var(--sa-left));
+  padding-right: max(var(--s4), var(--sa-right));
+  padding-bottom: calc(var(--s3) + var(--sa-bottom));
 }
 .composer-inner { max-width: var(--line-max); margin: 0 auto; min-width: 0; }
 
-#preview { display: flex; flex-wrap: wrap; gap: 6px; }
-#preview:not(:empty) { margin-bottom: 8px; }
+#preview { display: flex; flex-wrap: wrap; gap: var(--s1); }
+#preview:not(:empty) { margin-bottom: var(--s2); }
 /* 세션 필터의 .chip 과 이름이 겹쳐 썸네일이 늘어나던 문제로 .thumb 로 분리했다 */
 #preview .thumb { position: relative; flex: 0 0 auto; line-height: 0; }
 #preview .thumb img {
-  width: 60px; height: 60px;
+  width: 64px; height: 64px;
   object-fit: cover;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--r-sm);
 }
 #preview .thumb button {
   position: absolute;
   top: -6px; right: -6px;
   width: 22px; height: 22px;
   padding: 0;
-  border: 0; border-radius: 50%;
+  border: 0; border-radius: var(--r-pill);
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
   font-size: 13px; line-height: 1;
   display: grid; place-items: center;
 }
 
-.composer { display: flex; gap: 8px; align-items: flex-end; min-width: 0; }
+/* 떠 있는 판. 그림자 세 갈래 중 "떠 있는 것" 을 쓴다 */
+.composer {
+  display: flex;
+  gap: var(--s1);
+  align-items: flex-end;
+  min-width: 0;
+  padding: var(--s1);
+  background: var(--panel);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-float);
+}
 #attach-btn, #send {
   flex: 0 0 auto;
+  width: var(--tap);
   height: var(--tap);
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-pill);
   display: grid;
   place-items: center;
+  border: 0;
+  transition: background-color .14s ease, color .14s ease;
 }
 #attach-btn {
-  width: var(--tap);
-  font-size: 18px;
-  border: 1px solid var(--border);
-  background: var(--panel2);
+  background: transparent;
+  color: var(--muted);
 }
-#attach-btn:hover { border-color: var(--accent); }
+#attach-btn:hover { background: var(--panel2); color: var(--text); }
 #send {
-  width: var(--tap);
-  border: 0;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
-  font-size: 17px;
 }
+#send:hover:not(:disabled) { background: var(--accent-press); }
+/* 둥근 아이콘 단추 하나로 통일한다. 넓은 화면에서만 "전송" 글자가 나타나면
+   같은 단추가 화면 폭에 따라 두 모양이 되어 손이 헷갈린다.
+   글자 대신 aria-label 이 이름을 알려 준다. */
 #send .send-text { display: none; }
-#send:disabled { opacity: .5; cursor: default; }
+#send:disabled { opacity: .45; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  #attach-btn, #send { transition: none; }
+}
 
 #input {
   flex: 1 1 auto;
@@ -507,31 +756,46 @@ body.nav-open #nav { transform: translateX(0); }
   width: 100%;
   min-height: var(--tap);
   max-height: var(--composer-max);
-  padding: 11px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
+  padding: 13px var(--s3);
+  border: 0;
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--text);
   resize: none;
   overflow-y: auto;
-  /* 11(패딩) + 20(한 줄) + 11 + 2(테두리) = 44px -> 버튼 높이와 정확히 일치 */
+  /* 13(패딩) + 20(한 줄) + 13 = 46px -> 좌우 단추 높이와 정확히 일치 */
   line-height: 20px;
 }
-#input:focus { outline: none; border-color: var(--accent); }
+#input:focus { outline: none; }
+#input::placeholder { color: var(--muted); }
+/* 초점은 판 전체에 준다. 판 안의 글상자에만 윤곽선을 그리면
+   둥근 판 안에 또 둥근 테두리가 겹쳐 보인다. */
+.composer:focus-within { box-shadow: var(--sh-float), 0 0 0 2px var(--accent); }
 
-.hint { display: none; font-size: 11px; color: var(--muted); margin-top: 6px; }
+.hint {
+  display: none;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-top: var(--s2);
+  padding: 0 var(--s4);
+  text-align: center;
+}
 
 #drop-hint {
   display: none;
   position: absolute;
-  inset: 8px;
+  inset: var(--s3);
   z-index: 30;
-  border: 2px dashed var(--accent);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  font-weight: 700;
+  border: 0;
+  border-radius: var(--r-lg);
+  background: var(--accent-soft);
+  color: var(--accent-press);
+  font-size: 16px;
+  font-weight: 600;
   place-items: center;
   pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 body.dragging #drop-hint { display: grid; }
 
@@ -542,26 +806,27 @@ body.dragging #drop-hint { display: grid; }
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: rgba(0, 0, 0, .5);
+  background: rgba(20, 28, 36, .42);
   display: grid;
   place-items: center;
-  padding: max(16px, var(--sa-top)) 16px calc(16px + var(--sa-bottom));
+  padding: max(var(--s4), var(--sa-top)) var(--s4) calc(var(--s4) + var(--sa-bottom));
 }
 .modal {
   width: 100%;
-  max-width: 420px;
+  max-width: 460px;
   max-height: 100%;
   overflow-y: auto;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  padding: var(--s6);
+  border: 0;
+  border-radius: var(--r-lg);
   background: var(--panel);
-  box-shadow: var(--shadow);
+  box-shadow: var(--sh-modal);
 }
-.modal h3 { margin: 0 0 10px; font-size: 16px; }
+.modal h3 { margin: 0 0 var(--s2); font-size: 18px; line-height: 1.45; }
 .modal p {
-  margin: 0 0 12px;
-  font-size: 13px;
+  margin: 0 0 var(--s3);
+  font-size: 14px;
+  line-height: 1.75;
   color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -570,19 +835,20 @@ body.dragging #drop-hint { display: grid; }
 .modal input:not([type="radio"]):not([type="checkbox"]) {
   width: 100%;
   min-height: var(--tap);
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
+  padding: 12px 15px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--panel2);
 }
 .modal input:not([type="radio"]):not([type="checkbox"]):focus {
-  outline: none;
-  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--panel);
 }
-.modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.modal .actions .btn { min-height: var(--tap); padding: 0 16px; }
+.modal .actions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s5); }
+.modal .actions .btn { min-height: var(--tap); padding: 0 var(--s5); font-size: 14.5px; }
 
-#lightbox { padding: 0; background: rgba(0, 0, 0, .9); }
+#lightbox { padding: 0; background: rgba(12, 16, 20, .92); }
 #lightbox img {
   max-width: 100vw;
   max-height: 100dvh;
@@ -593,232 +859,176 @@ body.dragging #drop-hint { display: grid; }
 #toast {
   position: fixed;
   left: 50%;
-  bottom: calc(18px + var(--sa-bottom));
+  bottom: calc(var(--s5) + var(--sa-bottom));
   transform: translateX(-50%);
   z-index: 60;
   max-width: min(92vw, 520px);
-  padding: 10px 16px;
-  border-radius: var(--radius-sm);
+  padding: 13px var(--s5);
+  border-radius: var(--r);
   background: var(--danger);
-  color: #fff;
-  font-size: 13px;
-  box-shadow: var(--shadow);
+  color: var(--on-danger);
+  font-size: 13.5px;
+  line-height: 1.6;
+  box-shadow: var(--sh-float);
   display: none;
   overflow-wrap: anywhere;
 }
 
 /* =========================================================================
-   7. 태블릿 — 통합 사이드바 + 대화 (2단)
+   7. 넓은 화면
+   구조는 바뀌지 않는다. 서랍은 그대로 서랍이다. 숨을 쉴 여백만 늘린다.
    ========================================================================= */
 @media (min-width: 900px) {
-  #app { grid-template-columns: var(--nav-w) minmax(0, 1fr); }
-
-  #nav {
-    position: static;
-    width: auto;
-    transform: none;
-    box-shadow: none;
-    transition: none;
-    padding-top: var(--sa-top);
-    padding-bottom: 0;
-  }
-  .nav-head { display: none; }
-  #backdrop { display: none !important; }
-  #menu-toggle { display: none; }
-
-  #projects { max-height: 42%; }
-  #messages { padding: 18px 16px; }
+  #messages { padding: var(--s6) var(--s6); }
+  #composer-wrap { padding-bottom: calc(var(--s4) + var(--sa-bottom)); }
   .hint { display: block; }
-  #chat-head { padding-left: 16px; }
+  #chat-head { padding-left: max(var(--s4), var(--sa-left)); }
+  .msg.user .line { max-width: 78%; }
 }
 
-/* =========================================================================
-   8. 데스크톱 — 3단
-   ========================================================================= */
 @media (min-width: 1200px) {
-  #app { grid-template-columns: var(--project-w) var(--session-w) minmax(0, 1fr); }
+  #messages { padding: var(--s6) 40px; }
+}
 
-  /* 두 패널을 그리드의 직접 자식으로 승격 */
-  #nav { display: contents; }
-  #projects {
-    max-height: none;
-    border-right: 1px solid var(--border);
-    border-bottom: 0;
-    background: var(--panel2);
-  }
-  #sessions {
-    border-right: 1px solid var(--border);
-    background: var(--panel2);
-  }
-
-  #send {
-    width: auto;
-    padding: 0 20px;
-    font-size: 15px;
-  }
-  #send .send-text { display: inline; }
-  #send .send-icon { display: none; }
-
+/* 마우스가 있는 기기에서는 항목 위에 올렸을 때만 동작 단추를 보여 준다.
+   항상 켜 두면 목록 오른쪽이 단추로 빼곡해져 이름을 읽기 어렵다. */
+@media (hover: hover) and (pointer: fine) {
   .item .acts { display: none; }
-  .item:hover .acts, .item.active .acts { display: flex; }
-  .msg.user .bubble { max-width: 82%; }
+  .item:hover .acts, .item.active .acts, .item:focus-within .acts { display: flex; }
 }
 
-/* 마우스가 없는 기기에서는 액션 버튼을 항상 노출 */
-@media (hover: none) {
-  .item .acts { display: flex !important; }
-}
 
 /* =========================================================================
-   10. 포털 요소 (사용자 메뉴 / 세션 필터 / 공개범위)
+   8. 서랍 안의 도구 (필터 / 검색) 와 머리 부분의 조각들
    ========================================================================= */
 .pane-tools {
   flex: none;
-  padding: 0 10px 8px;
+  padding: 0 var(--s3) var(--s3);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--s2);
+  border-bottom: 0;
 }
 
-.chips { display: flex; gap: 6px; }
+.chips { display: flex; gap: var(--s1); }
 
 .chips .chip {
   flex: 1;
-  min-height: 32px;
-  padding: 0 6px;
+  min-height: 34px;
+  padding: 0 var(--s2);
   background: var(--panel2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  border: 0;
+  border-radius: var(--r-pill);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
+  transition: background-color .14s ease, color .14s ease;
 }
 
+.chips .chip:hover { color: var(--text); }
+
 .chips .chip.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--text);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chips .chip { transition: none; }
 }
 
 #session-search {
   width: 100%;
-  min-height: 34px;
-  padding: 0 10px;
+  min-height: 38px;
+  padding: 0 var(--s4);
   background: var(--panel2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--r);
   color: var(--text);
 }
+#session-search:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+#session-search::placeholder { color: var(--muted); }
 
 /* 세션 항목 : 공개범위 아이콘 + 이름 + 소유자 */
-.item .vis { flex: none; width: 15px; text-align: center; font-size: 12px; line-height: 1.2; }
+.item .vis {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.item.active .vis { color: var(--accent-press); }
+.item .vis svg, .vis-badge svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.vis-badge svg { width: 12px; height: 12px; }
 
-.item .stack { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.item .stack { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 0; }
 
 .item .stack .label { width: auto; }
 
 .item .owner {
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* 사용자 메뉴 */
-/* 헤더의 메모 버튼.
-   예전에는 아바타 메뉴 안에만 있어서 찾기 어려웠다. 채팅과 메모는 동등한
-   주요 기능이므로 헤더에 항상 보이게 둔다. */
-.head-link {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel2);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.head-link:hover { border-color: var(--accent); color: var(--accent); }
-.head-link svg {
-  width: 16px; height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.9;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  pointer-events: none;
-}
-/* 좁은 화면에서는 글자를 접고 아이콘만 남긴다. 제목이 밀리지 않게 한다. */
-@media (max-width: 560px) {
-  .head-link { width: 34px; padding: 0; }
-  .head-link span { display: none; }
+/* 좁은 화면에서는 공개범위 글자를 접고 아이콘만 남긴다.
+   제목이 밀리지 않게 한다. */
+@media (max-width: 620px) {
+  .vis-badge { padding: 4px; margin-left: 4px; }
+  .vis-badge .vis-label { display: none; }
+  #chat-head { gap: var(--s1); }
+  #install-btn { padding: 0 var(--s3); font-size: 13px; }
+  #menu-toggle span { display: none; }
+  #menu-toggle { padding: 0 11px; }
 }
 
-.usermenu { position: relative; flex: none; }
-
-#user-btn {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-radius: 50%;
-  background: var(--accent-soft);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
+/* 아바타 메뉴. 레일 바닥에 있다.
+   바닥에 붙어 있으므로 메뉴는 위로 열린다. */
+.usermenu { position: relative; }
 
 .usermenu .menu {
   position: absolute;
-  top: calc(100% + 6px);
+  bottom: calc(100% + var(--s2));
+  left: 0;
   right: 0;
-  z-index: 40;
-  min-width: 210px;
-  padding: 6px;
+  z-index: 42;
+  padding: var(--s2);
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  border: 0;
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-modal);
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
-
-.usermenu .menu-head {
-  padding: 6px 10px 10px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 4px;
-}
-
-.usermenu .menu-head > div:first-child { font-weight: 600; }
-.usermenu .menu-sub { font-size: 12px; color: var(--muted); }
 
 .usermenu .menu > button,
 .usermenu .menu > a {
   display: block;
   width: 100%;
-  min-height: 38px;
-  padding: 0 10px;
+  min-height: 40px;
+  padding: 0 var(--s3);
   background: none;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   text-align: left;
   color: var(--text);
   text-decoration: none;
   font-size: 14px;
-  line-height: 38px;
+  line-height: 40px;
 }
 
 .usermenu .menu > button:hover,
@@ -830,12 +1040,12 @@ body.dragging #drop-hint { display: grid; }
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
-  padding: 1px 7px;
-  margin-left: 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
+  padding: 1px var(--s2);
+  margin-left: var(--s1);
+  border-radius: var(--r-pill);
+  border: 0;
   background: var(--panel2);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--muted);
   vertical-align: middle;
@@ -843,25 +1053,26 @@ body.dragging #drop-hint { display: grid; }
 }
 
 /* 모달 선택지 */
-.modal .choices { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 2px; }
+.modal .choices { display: flex; flex-direction: column; gap: var(--s1); margin: var(--s1) 0 2px; }
 
 /* [라디오][제목] / [      ][설명] 2단 그리드. 설명이 길어도 줄바꿈만 된다 */
 .modal .choices label {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  column-gap: 8px;
+  column-gap: var(--s3);
   row-gap: 2px;
   min-height: var(--tap);
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: var(--s3) var(--s4);
+  border: 0;
+  border-radius: var(--r);
   background: var(--panel2);
   cursor: pointer;
   font-size: 14px;
+  transition: background-color .14s ease;
 }
 
-.modal .choices label.on { border-color: var(--accent); background: var(--accent-soft); }
+.modal .choices label.on { background: var(--accent-soft); color: var(--accent-press); }
 
 .modal .choices input {
   grid-column: 1;
@@ -882,8 +1093,36 @@ body.dragging #drop-hint { display: grid; }
   grid-column: 2;
   grid-row: 2;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal .choices label { transition: none; }
+}
+
+/* =========================================================================
+   9. 아주 좁은 화면
+   ========================================================================= */
+@media (max-width: 420px) {
+  #messages { padding: var(--s4) var(--s3); }
+  .bubble { padding: 12px var(--s4); }
+  .msg.user .line { max-width: 90%; }
+  .msg .av { width: 28px; height: 28px; font-size: 12px; }
+  .msg .role, .meta { padding-left: 36px; }
+  .msg.user .role { padding-right: 36px; padding-left: 0; }
+}
+
+/* 손가락으로 누르는 기기에서는 모든 조작 요소를 44px 이상으로 키운다.
+   마우스가 있는 화면에서는 작은 단추가 정보 밀도에 도움이 되지만,
+   손가락에는 44px 아래가 잘 안 눌린다. */
+@media (pointer: coarse) {
+  .icon-btn { width: var(--tap); height: var(--tap); }
+  .btn { min-height: var(--tap); padding: 0 var(--s5); }
+  .chips .chip { min-height: var(--tap); }
+  #session-search { min-height: var(--tap); }
+  .usermenu .menu > button, .usermenu .menu > a { min-height: var(--tap); line-height: var(--tap); }
+  #menu-toggle { min-height: var(--tap); }
 }
 </style>
 </head>
@@ -891,12 +1130,14 @@ body.dragging #drop-hint { display: grid; }
 <body>
 
 <div id="app">
+  {% include "_rail.html" %}
+
   <div id="backdrop"></div>
 
   <nav id="nav" aria-label="프로젝트 및 세션">
     <div class="nav-head">
-      <span>Claude Web</span>
-      <button class="icon-btn" id="nav-close" aria-label="메뉴 닫기">
+      <span>프로젝트와 세션</span>
+      <button class="icon-btn" id="nav-close" aria-label="닫기">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
     </div>
@@ -929,30 +1170,19 @@ body.dragging #drop-hint { display: grid; }
 
   <main id="chat">
     <header id="chat-head">
-      <button id="menu-toggle" aria-label="메뉴 열기" aria-expanded="false">☰</button>
+      <button id="rail-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+      </button>
+      <button id="menu-toggle" type="button" aria-label="세션 목록 열기" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+        <span>세션</span>
+        <span id="session-count" class="count"></span>
+      </button>
       <div class="titles">
         <div id="chat-title">Claude Web</div>
         <div id="chat-sub"></div>
       </div>
-      <a class="head-link" href="/notes" title="메모">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
-        <span>메모</span>
-      </a>
       <button class="btn" id="install-btn" hidden>앱 설치</button>
-      <div class="usermenu">
-        <button class="icon-btn" id="user-btn" aria-haspopup="true" aria-expanded="false"
-                aria-label="내 메뉴"><span id="user-initial">?</span></button>
-        <div class="menu" id="user-menu" hidden role="menu">
-          <div class="menu-head">
-            <div id="menu-name"></div>
-            <div id="menu-role" class="menu-sub"></div>
-          </div>
-          <button type="button" id="menu-mine" role="menuitem">내 세션만 보기</button>
-          <button type="button" id="menu-password" role="menuitem">비밀번호 변경</button>
-          <a id="menu-admin" href="/admin" role="menuitem" hidden>관리자</a>
-          <a href="/logout" role="menuitem">로그아웃</a>
-        </div>
-      </div>
     </header>
 
     <div id="messages"><div class="wrap" id="list"></div></div>
@@ -985,6 +1215,8 @@ body.dragging #drop-hint { display: grid; }
 
 <div id="toast" role="status" aria-live="polite"></div>
 
+<script src="/static/rail.js" defer></script>
+
 <script>
 (function () {
   "use strict";
@@ -996,8 +1228,72 @@ body.dragging #drop-hint { display: grid; }
   var IS_ADMIN = {{ is_admin|tojson }};
   var CSRF = {{ csrf|tojson }};
 
-  var ICON_PRIVATE = "🔒";
-  var ICON_PUBLIC = "🌐";
+  /* ---------------------------------------------------------------- 시각
+     서버가 넣는 문자열은 "YYYY-MM-DD HH:MM:SS" 이고 서버의 지역시각이다.
+     (db.ts() 가 time.strftime 을 쓴다) 시간대 변환 없이 그대로 읽는다.
+     Date 생성자에 문자열을 그냥 넘기면 브라우저마다 해석이 달라서 직접 쪼갠다. */
+  function parseTs(s) {
+    var m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+    if (!m) { return null; }
+    return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  }
+
+  function timeLabel(s) {
+    var d = parseTs(s);
+    if (!d) { return ""; }
+    var h = d.getHours();
+    var ampm = h < 12 ? "오전" : "오후";
+    var h12 = h % 12 === 0 ? 12 : h % 12;
+    return ampm + " " + h12 + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+
+  function dayKey(s) {
+    var m = String(s || "").match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : "";
+  }
+
+  function dayLabel(s) {
+    var d = parseTs(s);
+    if (!d) { return ""; }
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    var that = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    var diff = Math.round((today - that) / 86400000);
+    if (diff === 0) { return "오늘"; }
+    if (diff === 1) { return "어제"; }
+    if (diff < 7) { return "지난 주"; }
+    if (d.getFullYear() === today.getFullYear()) {
+      return (d.getMonth() + 1) + "월 " + d.getDate() + "일";
+    }
+    return d.getFullYear() + "년 " + (d.getMonth() + 1) + "월 " + d.getDate() + "일";
+  }
+
+  /* 그림 문자(이모지) 대신 선으로 그린 아이콘을 쓴다.
+     이모지는 기기와 글꼴마다 모양과 색이 달라서, 한 화면 안에서 혼자 튄다.
+     자물쇠 = 나만 보기, 지구 = 전체 공개, 클립 = 첨부파일. */
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  function svgIcon(shapes) {
+    var s = document.createElementNS(SVG_NS, "svg");
+    s.setAttribute("viewBox", "0 0 24 24");
+    s.setAttribute("aria-hidden", "true");
+    shapes.forEach(function (d) {
+      var node = document.createElementNS(SVG_NS, d[0]);
+      Object.keys(d[1]).forEach(function (k) { node.setAttribute(k, d[1][k]); });
+      s.appendChild(node);
+    });
+    return s;
+  }
+
+  /* 아래 ICON_GLOBE 는 이미 문자열로 쓰이는 이름이다. 모양 목록은 SHAPE_ 로 둔다 */
+  var SHAPE_LOCK = [["rect", { x: "5", y: "11", width: "14", height: "9", rx: "3" }],
+                    ["path", { d: "M8 11V8a4 4 0 0 1 8 0v3" }]];
+  var SHAPE_GLOBE = [["circle", { cx: "12", cy: "12", r: "9" }],
+                     ["path", { d: "M3 12h18" }],
+                     ["path", { d: "M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" }]];
+
+  function visIcon(isPublic) { return svgIcon(isPublic ? SHAPE_GLOBE : SHAPE_LOCK); }
+
 
   var state = {
     projectId: null, sessionId: null, projects: [], sessions: [],
@@ -1230,6 +1526,17 @@ body.dragging #drop-hint { display: grid; }
     }
   }
 
+  /* 말풍선 옆에 붙는 둥근 아바타.
+     CSS 로는 사람 이름의 첫 글자를 알 수 없어서 여기서 만든다. */
+  function avatarFor(role, text) {
+    var a = document.createElement("span");
+    a.className = "av";
+    /* 아바타는 바로 아래 이름표와 같은 정보다. 보조 기기가 두 번 읽지 않게 한다 */
+    a.setAttribute("aria-hidden", "true");
+    a.textContent = text;
+    return a;
+  }
+
   function addMessage(msg) {
     var role = msg.role === "user" ? "user" : (msg.role === "error" ? "error" : "assistant");
     var el = document.createElement("div");
@@ -1237,6 +1544,7 @@ body.dragging #drop-hint { display: grid; }
 
     var r = document.createElement("div");
     r.className = "role";
+    var initial = "C";
     if (role === "user") {
       var who = document.createElement("span");
       who.className = "who";
@@ -1244,10 +1552,15 @@ body.dragging #drop-hint { display: grid; }
       who.textContent = (msg.user_id && ME && msg.user_id === ME.id) ? "나"
         : (msg.author_name || "나");
       r.appendChild(who);
+      initial = (who.textContent || "?").trim().charAt(0) || "?";
+    } else if (role === "error") {
+      r.textContent = "오류";
+      initial = "!";
     } else {
-      r.textContent = role === "error" ? "오류" : "Claude";
+      r.textContent = "Claude";
     }
-    el.appendChild(r);
+    var t = timeLabel(msg.created_at);
+    if (t) { r.appendChild(document.createTextNode(", " + t)); }
 
     var bubble = document.createElement("div");
     bubble.className = "bubble";
@@ -1268,10 +1581,34 @@ body.dragging #drop-hint { display: grid; }
     }
 
     renderContent(bubble, msg.content);
-    el.appendChild(bubble);
+
+    /* 아바타와 말풍선을 한 줄에 놓고, 이름표는 그 아래에 둔다.
+       보낸 사람 쪽은 CSS 가 이 줄을 뒤집어 아바타를 오른쪽으로 보낸다. */
+    var line = document.createElement("div");
+    line.className = "line";
+    line.appendChild(avatarFor(role, initial));
+    line.appendChild(bubble);
+    el.appendChild(line);
+    el.appendChild(r);
+
+    dayDivider(msg.created_at);
     listEl.appendChild(el);
     scrollToBottom();
     return el;
+  }
+
+  /* 날짜가 바뀌는 자리에만 알약을 넣는다. 마지막으로 넣은 날짜를 목록 자체에
+     기억해 두면, 보낸 뒤 이어 붙는 메시지에도 같은 규칙이 적용된다. */
+  function dayDivider(stamp) {
+    var key = dayKey(stamp);
+    if (!key || listEl.getAttribute("data-day") === key) { return; }
+    listEl.setAttribute("data-day", key);
+    var d = document.createElement("div");
+    d.className = "day";
+    var s = document.createElement("span");
+    s.textContent = dayLabel(stamp);
+    d.appendChild(s);
+    listEl.appendChild(d);
   }
 
   function addPending() {
@@ -1280,12 +1617,16 @@ body.dragging #drop-hint { display: grid; }
     var r = document.createElement("div");
     r.className = "role";
     r.textContent = "Claude";
-    el.appendChild(r);
     var b = document.createElement("div");
     b.className = "bubble typing";
     for (var i = 0; i < 3; i++) { b.appendChild(document.createElement("span")).className = "dot"; }
     b.appendChild(document.createTextNode(" 응답 생성 중..."));
-    el.appendChild(b);
+    var line = document.createElement("div");
+    line.className = "line";
+    line.appendChild(avatarFor("assistant", "C"));
+    line.appendChild(b);
+    el.appendChild(line);
+    el.appendChild(r);
     listEl.appendChild(el);
     scrollToBottom();
     return el;
@@ -1334,7 +1675,7 @@ body.dragging #drop-hint { display: grid; }
     if (opts.vis) {
       var v = document.createElement("span");
       v.className = "vis";
-      v.textContent = opts.vis === "public" ? ICON_PUBLIC : ICON_PRIVATE;
+      v.appendChild(visIcon(opts.vis === "public"));
       v.title = opts.vis === "public" ? "전체 공개" : "나만 보기";
       it.appendChild(v);
     }
@@ -1505,6 +1846,7 @@ body.dragging #drop-hint { display: grid; }
       e0.className = "pane-empty";
       e0.textContent = "프로젝트를 먼저 선택하세요.";
       box.appendChild(e0);
+      updateSessionCount();
       return;
     }
     if (!state.sessions.length) {
@@ -1514,9 +1856,20 @@ body.dragging #drop-hint { display: grid; }
         : (state.scope === "mine" ? "내가 만든 세션이 없습니다."
           : state.scope === "public" ? "공개된 세션이 없습니다." : "세션이 없습니다.");
       box.appendChild(e);
+      updateSessionCount();
       return;
     }
+    var lastDay = null;
     state.sessions.forEach(function (s) {
+      /* 세션도 날짜로 묶는다. 목록이 길어지면 이름만으로는 최근 것을 찾기 어렵다 */
+      var key = dayKey(s.updated_at);
+      if (key && key !== lastDay) {
+        lastDay = key;
+        var h = document.createElement("div");
+        h.className = "pane-day";
+        h.textContent = dayLabel(s.updated_at);
+        box.appendChild(h);
+      }
       var actions = [];
       if (s.can_manage) {   /* 소유자만. 서버에서도 동일하게 검사한다 */
         actions.push({ icon: ICON_GLOBE, title: "공개 범위 변경",
@@ -1536,6 +1889,15 @@ body.dragging #drop-hint { display: grid; }
         actions: actions
       }));
     });
+    updateSessionCount();
+  }
+
+  /* 머리의 "세션" 단추 옆에 지금 보이는 세션 수를 적는다.
+     판을 열지 않고도 뭔가 들어 있는지 알 수 있어야 한다. */
+  function updateSessionCount() {
+    var el = $("session-count");
+    if (!el) { return; }
+    el.textContent = state.sessions.length ? String(state.sessions.length) : "";
   }
 
   function ownerLabel(s) {
@@ -1565,8 +1927,8 @@ body.dragging #drop-hint { display: grid; }
   }
 
   var VIS_CHOICES = [
-    { value: "private", label: ICON_PRIVATE + " 나만 보기", desc: "나만 볼 수 있습니다" },
-    { value: "public", label: ICON_PUBLIC + " 전체 공개",
+    { value: "private", label: "나만 보기", desc: "나만 볼 수 있습니다" },
+    { value: "public", label: "전체 공개",
       desc: "로그인한 모두가 보고 함께 대화할 수 있습니다" }
   ];
 
@@ -1645,8 +2007,13 @@ body.dragging #drop-hint { display: grid; }
     if (s) {
       var b = document.createElement("span");
       b.className = "vis-badge";
-      b.textContent = (s.visibility === "public" ? ICON_PUBLIC + " 전체 공개"
-        : ICON_PRIVATE + " 나만 보기");
+      b.appendChild(visIcon(s.visibility === "public"));
+      var blabel = document.createElement("span");
+      blabel.className = "vis-label";
+      blabel.textContent = s.visibility === "public" ? "전체 공개" : "나만 보기";
+      b.appendChild(blabel);
+      /* 글자를 접는 좁은 화면에서도 무슨 배지인지 알 수 있어야 한다 */
+      b.title = blabel.textContent;
       title.appendChild(b);
     }
 
@@ -1681,6 +2048,7 @@ body.dragging #drop-hint { display: grid; }
         renderChatHeader();
       }
       listEl.textContent = "";
+      listEl.removeAttribute("data-day");
       if (!d.messages.length) { emptyChat("이 세션의 첫 질문을 입력하세요."); }
       d.messages.forEach(addMessage);
       scrollToBottom();
@@ -1908,8 +2276,8 @@ body.dragging #drop-hint { display: grid; }
     $("user-initial").textContent = name.slice(0, 1).toUpperCase();
     $("user-btn").title = name;
     $("menu-name").textContent = name;
+    /* 관리자로 가는 길은 왼쪽 레일에 있다. 여기서 또 보여 주지 않는다. */
     $("menu-role").textContent = ME.username + (IS_ADMIN ? " · 관리자" : "");
-    $("menu-admin").hidden = !IS_ADMIN;
 
     var menu = $("user-menu");
     function closeMenu() {

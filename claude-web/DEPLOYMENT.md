@@ -895,11 +895,12 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ### UI 를 고쳤는데 옛 화면이 보일 때
 
-서비스워커가 정적 파일을 캐시합니다. `static/shared.css` 나 `static/sw.js` 를
-고쳤다면 `static/sw.js` 의 캐시 버전을 올리세요.
+서비스워커가 정적 파일을 캐시합니다. `static/shared.css`, `static/type.css`,
+`static/fonts/*`, `static/sw.js` 를 고쳤다면 `static/sw.js` 의 캐시 버전을 올리세요.
+이 파일들은 모두 서비스워커의 `SHELL` 목록에 들어 있습니다.
 
 ```js
-const VERSION = "claude-web-v3";   // -> v4
+const VERSION = "claude-web-v5";   // -> v6
 ```
 
 `activate` 에서 이전 버전 캐시를 통째로 지웁니다.

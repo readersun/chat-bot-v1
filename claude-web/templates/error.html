@@ -5,14 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{ code }} · Claude Web</title>
 <meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="/static/type.css">
 <link rel="stylesheet" href="/static/shared.css">
 </head>
 <body>
 <div class="center-wrap">
   <div class="card" style="text-align:center;">
-    <h1 style="font-size:40px; margin-bottom:8px;">{{ code }}</h1>
-    <p class="sub" style="margin-bottom:20px;">{{ message }}</p>
+    <div class="glyph" aria-hidden="true">{{ code }}</div>
+    <h1>{{ title|default('요청을 처리하지 못했습니다') }}</h1>
+    <p class="sub">{{ message|default('', true) or '주소가 맞는지 확인하거나 채팅으로 돌아가세요.' }}</p>
     <a class="btn primary block" href="/" style="text-decoration:none;">채팅으로 돌아가기</a>
   </div>
 </div>

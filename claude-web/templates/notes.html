@@ -6,9 +6,11 @@
 <title>메모 · Claude Web</title>
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#202126" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
 <link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
 <link rel="stylesheet" href="/static/shared.css">
 <style>
 /* =========================================================================
@@ -16,83 +18,164 @@
    데스크톱 : [목록 | 내용] 2단
    모바일   : 1단. 목록 -> 선택 -> 보기/수정 흐름으로 전환한다.
               (2단을 억지로 유지하면 좁은 화면에서 양쪽 다 못 쓰게 된다)
+
+   목록은 표가 아니라 둥근 카드 행이다. 예전에는 왼쪽에 회색 판을 깔고
+   세로 구분선을 그었다. 선을 지우고 카드가 스스로 떠 있게 한다.
+   색과 모서리와 그림자 값은 shared.css 의 토큰을 그대로 쓴다.
    ========================================================================= */
 html, body { height: 100%; }
 body { overflow: hidden; }
 
+@media (min-width: 900px) {
+  body { display: grid; grid-template-columns: 220px minmax(0, 1fr); }
+}
+
+.shell-main {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 좁은 화면에서 왼쪽 레일 서랍을 여는 단추 */
+#rail-toggle {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+#rail-toggle:hover { background: var(--panel2); }
+#rail-toggle svg {
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
+  pointer-events: none;
+}
+
+/* 레일 오른쪽이 본문이다 */
+.shell-main { min-width: 0; }
+
+
+/* 알림은 #wrap 밖에 있다. 좌우 여백을 여기서 준다 */
+#alerts:not(:empty) { padding: var(--s3) var(--s5) 0; }
+
 #wrap {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  height: calc(var(--app-h) - var(--header-h) - var(--sa-top));
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: var(--s4);
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--s4) max(var(--s5), var(--sa-right)) var(--s4) max(var(--s5), var(--sa-left));
 }
 
 /* ---------------------------------------------------------------- 목록 */
+/* 판을 깔지 않는다. 카드 행 자체가 층이다 */
 #list-pane {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--border);
-  background: var(--panel2);
+  border-right: 0;
+  background: transparent;
 }
 
 .pane-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 12px 8px;
+  gap: var(--s2);
+  padding: 0 var(--s1) var(--s3);
 }
-.pane-head h1 { margin: 0; font-size: 15px; font-weight: 700; }
+.pane-head h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.005em; }
 .pane-head .spacer { flex: 1; }
 
-.pane-tools { padding: 0 12px 10px; display: grid; gap: 8px; }
+.pane-tools { padding: 0 var(--s1) var(--s3); display: grid; gap: var(--s2); }
 
-.chips { display: flex; gap: 6px; }
+.chips { display: flex; gap: var(--s1); }
 .chip {
   flex: 1;
-  min-height: 32px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  min-height: 34px;
+  padding: 0 var(--s2);
+  border: 0;
+  border-radius: var(--r-pill);
   background: var(--panel);
   color: var(--muted);
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color .14s ease, color .14s ease;
 }
-.chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+.chip:hover { color: var(--text); }
+.chip.active { background: var(--accent); color: var(--on-accent); }
 
 #search {
   width: 100%;
-  min-height: 36px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  min-height: 40px;
+  padding: 0 var(--s4);
+  border: 0;
+  border-radius: var(--r);
   background: var(--panel);
   color: var(--text);
   font: inherit;
 }
-#search:focus { outline: none; border-color: var(--accent); }
+#search:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+#search::placeholder { color: var(--muted); }
 
-#list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 16px; }
+#list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px var(--s1) var(--s4); }
 
+/* 메모 한 건 = 카드 한 장. 테두리를 두르지 않고 그림자로만 띄운다 */
 .item {
   width: 100%;
   display: block;
   text-align: left;
-  padding: 10px;
-  margin-bottom: 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
+  padding: var(--s3) var(--s4);
+  margin-bottom: var(--s2);
+  border: 0;
+  border-radius: var(--r);
+  background: var(--panel);
+  box-shadow: var(--sh-card);
   color: inherit;
   font: inherit;
   cursor: pointer;
+  transition: background-color .14s ease, transform .14s ease;
 }
-.item:hover { background: var(--panel); }
-.item.active { background: var(--panel); border-color: var(--accent); }
+.item:hover { background: var(--panel2); }
+.item.active {
+  background: var(--accent-soft);
+  color: var(--accent-press);
+  box-shadow: none;
+}
 
-.item .line1 { display: flex; align-items: center; gap: 6px; }
-.item .vis { flex: none; font-size: 13px; }
+@media (prefers-reduced-motion: reduce) {
+  .item, .chip { transition: none; }
+}
+
+.item .line1 { display: flex; align-items: center; gap: var(--s1); }
+.item .vis {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.item.active .vis { color: var(--accent-press); }
+.item .vis svg, .item .clip svg, .badge svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .item .name {
   flex: 1;
   min-width: 0;
@@ -101,76 +184,102 @@ body { overflow: hidden; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.item .clip { flex: none; font-size: 12px; color: var(--muted); }
-.item .line2 {
-  margin-top: 2px;
+.item .clip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-size: 12px;
+  color: var(--muted);
+}
+.item .line2 {
+  margin-top: 1px;
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.item.active .line2, .item.active .clip { color: var(--accent-press); opacity: .85; }
 
-.empty { padding: 24px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+.empty {
+  padding: 40px var(--s4);
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.75;
+  text-align: center;
+}
 
 /* ---------------------------------------------------------------- 본문 */
-#view-pane { min-width: 0; overflow-y: auto; padding: 18px 20px 40px; }
+/* 오른쪽은 흰 판 한 장이다. 판 안에서만 스크롤한다 */
+#view-pane {
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--s6) 28px 40px;
+  background: var(--panel);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+}
 
 #back-btn { display: none; }
 
-.note-head { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.note-head { display: flex; align-items: flex-start; gap: var(--s3); flex-wrap: wrap; }
 .note-head h2 {
   margin: 0;
   flex: 1;
   min-width: 200px;
-  font-size: 20px;
-  line-height: 1.35;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -.005em;
   overflow-wrap: anywhere;
 }
-.note-meta { margin: 6px 0 16px; font-size: 13px; color: var(--muted); }
+.note-meta { margin: var(--s2) 0 var(--s5); font-size: 13px; line-height: 1.7; color: var(--muted); }
 
-/* 줄바꿈이 그대로 보여야 한다. rich text editor 는 쓰지 않는다. */
+/* 줄바꿈이 그대로 보여야 한다. rich text editor 는 쓰지 않는다.
+   본문 위에 선을 긋지 않는다. 위쪽 여백이 그 일을 한다. */
 .note-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 15px;
-  line-height: 1.7;
-  padding: 14px 0;
-  border-top: 1px solid var(--border);
+  line-height: 1.85;
+  padding: var(--s3) 0 var(--s2);
+  border-top: 0;
 }
 .note-body.blank { color: var(--muted); }
 
 /* ------------------------------------------------------------ 첨부파일 */
-.att-list { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.att-list { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
 
 .att {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s3);
   max-width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
+  padding: var(--s2) var(--s3);
+  border: 0;
+  border-radius: var(--r);
+  background: var(--panel2);
 }
 .att img {
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   flex: none;
   background: var(--code-bg);
 }
 .att .ico {
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   flex: none;
   display: grid;
   place-items: center;
-  border-radius: 6px;
-  background: var(--code-bg);
+  border-radius: var(--r-sm);
+  background: var(--panel);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--muted);
 }
 .att .info { min-width: 0; }
@@ -182,64 +291,98 @@ body { overflow: hidden; }
   white-space: nowrap;
   color: var(--accent);
 }
-.att .fsize { font-size: 12px; color: var(--muted); }
+.att .fsize { font-size: 12.5px; line-height: 1.6; color: var(--muted); }
 .att .del {
   flex: none;
-  min-height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
+  min-height: 32px;
+  padding: 0 var(--s3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--error-bg);
   color: var(--danger);
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
 }
+.att .del:hover { background: var(--danger); color: var(--on-danger); }
 
 /* ------------------------------------------------------------------ 폼 */
-.form-field { margin-bottom: 14px; }
+.form-field { margin-bottom: var(--s4); }
 .form-field > label {
   display: block;
-  margin-bottom: 6px;
-  font-size: 13px;
+  margin-bottom: 7px;
+  font-size: 12.5px;
   font-weight: 600;
+  line-height: 1.6;
   color: var(--muted);
 }
 .form-field input[type="text"], .form-field textarea {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
+  padding: 12px 15px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--panel2);
   color: var(--text);
   font: inherit;
 }
-.form-field textarea { min-height: 260px; resize: vertical; line-height: 1.7; }
+.form-field textarea {
+  min-height: 280px;
+  resize: vertical;
+  line-height: 1.85;
+  border-radius: var(--r);
+  padding: var(--s4);
+}
 .form-field input[type="text"]:focus, .form-field textarea:focus {
-  outline: none; border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--panel);
 }
 
-.radios { display: flex; gap: 16px; flex-wrap: wrap; }
-.radios label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+/* 공개범위 선택. 동그라미 두 개를 나란히 두는 대신 누를 수 있는 면으로 넓힌다 */
+.radios { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.radios label {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 44px;
+  padding: 0 var(--s4);
+  border-radius: var(--r);
+  background: var(--panel2);
+  font-size: 14px;
+  cursor: pointer;
+}
 .radios input { width: 18px; height: 18px; accent-color: var(--accent); }
 
-.picked { margin-top: 8px; font-size: 13px; color: var(--muted); }
+.picked { margin-top: var(--s2); font-size: 13px; line-height: 1.7; color: var(--muted); }
 .picked div { overflow-wrap: anywhere; }
 
+/* 저장과 취소 위에 선을 긋지 않는다. 여백으로 끊는다 */
 .form-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--s2);
   flex-wrap: wrap;
-  padding-top: 6px;
-  border-top: 1px solid var(--border);
+  padding-top: var(--s4);
+  border-top: 0;
 }
 .form-actions .spacer { flex: 1; }
 
+/* 손가락으로 누르는 기기에서는 조작 요소를 44px 이상으로 키운다 */
+@media (pointer: coarse) {
+  .chip { min-height: var(--tap); }
+  #search { min-height: var(--tap); }
+  .att .del { min-height: var(--tap); }
+}
+
 /* ------------------------------------------------------------- 모바일 */
 @media (max-width: 860px) {
-  #wrap { grid-template-columns: minmax(0, 1fr); }
+  #wrap {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding: var(--s3) var(--s3) 0;
+  }
   #list-pane { border-right: 0; }
-  #view-pane { display: none; padding: 16px 14px 40px; }
+  #view-pane { display: none; padding: var(--s5) var(--s5) 40px; }
 
   /* 상세를 보는 중에는 목록을 감추고 본문만 보여준다 */
   body.detail #list-pane { display: none; }
@@ -247,18 +390,29 @@ body { overflow: hidden; }
 
   #back-btn { display: inline-flex; }
   .att .fname { max-width: 150px; }
-  .form-field textarea { min-height: 200px; }
+  .form-field textarea { min-height: 220px; }
+  #alerts:not(:empty) { padding: var(--s3) var(--s3) 0; }
+}
+
+@media (max-width: 600px) {
+  #wrap { padding: var(--s2) var(--s2) 0; }
+  #view-pane { padding: var(--s4) var(--s4) 40px; }
+  .note-head h2 { font-size: 21px; }
 }
 </style>
 </head>
 <body>
 
+{% include "_rail.html" %}
+
+<div class="shell-main">
+
 <header class="top">
+  <button id="rail-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+  </button>
   <span class="brand">메모</span>
   <span class="spacer"></span>
-  <a class="btn sm" href="/" style="text-decoration:none;">채팅</a>
-  {% if is_admin %}<a class="btn sm" href="/admin" style="text-decoration:none;">관리자</a>{% endif %}
-  <a class="btn sm" href="/logout" style="text-decoration:none;">로그아웃</a>
 </header>
 
 <div id="alerts" role="status" aria-live="polite"></div>
@@ -285,6 +439,10 @@ body { overflow: hidden; }
   <main id="view-pane" aria-live="polite"></main>
 </div>
 
+</div><!-- /.shell-main -->
+
+<script src="/static/rail.js" defer></script>
+
 <script>
 (function () {
   "use strict";
@@ -293,8 +451,33 @@ body { overflow: hidden; }
   var CSRF = {{ csrf|tojson }};
   var LIMITS = {{ limits|tojson }};
 
-  var ICON_PRIVATE = "\u{1F512}";   /* 🔒 */
-  var ICON_PUBLIC = "\u{1F310}";    /* 🌐 */
+  /* 그림 문자(이모지) 대신 선으로 그린 아이콘을 쓴다.
+     이모지는 기기와 글꼴마다 모양과 색이 달라서, 한 화면 안에서 혼자 튄다.
+     자물쇠 = 나만 보기, 지구 = 전체 공개, 클립 = 첨부파일. */
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  function svgIcon(shapes) {
+    var s = document.createElementNS(SVG_NS, "svg");
+    s.setAttribute("viewBox", "0 0 24 24");
+    s.setAttribute("aria-hidden", "true");
+    shapes.forEach(function (d) {
+      var node = document.createElementNS(SVG_NS, d[0]);
+      Object.keys(d[1]).forEach(function (k) { node.setAttribute(k, d[1][k]); });
+      s.appendChild(node);
+    });
+    return s;
+  }
+
+  var ICON_LOCK = [["rect", { x: "5", y: "11", width: "14", height: "9", rx: "3" }],
+                   ["path", { d: "M8 11V8a4 4 0 0 1 8 0v3" }]];
+  var ICON_GLOBE = [["circle", { cx: "12", cy: "12", r: "9" }],
+                    ["path", { d: "M3 12h18" }],
+                    ["path", { d: "M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" }]];
+  var ICON_CLIP = [["path", { d: "M20 11.5l-8 8a5 5 0 0 1-7-7l8-8a3.3 3.3 0 0 1 4.7 4.7"
+                                 + "l-8 8a1.7 1.7 0 0 1-2.4-2.4l7.2-7.2" }]];
+
+  function visIcon(isPublic) { return svgIcon(isPublic ? ICON_GLOBE : ICON_LOCK); }
+
 
   var listBox = document.getElementById("list");
   var viewBox = document.getElementById("view-pane");
@@ -443,11 +626,12 @@ body { overflow: hidden; }
         onclick: function () { open(n.id); }
       }, [
         el("div", { class: "line1" }, [
-          el("span", { class: "vis", title: isPub ? "전체 공유" : "나만 보기",
-                       text: isPub ? ICON_PUBLIC : ICON_PRIVATE }),
+          el("span", { class: "vis", title: isPub ? "전체 공유" : "나만 보기" },
+             [visIcon(isPub)]),
           el("span", { class: "name", text: n.title || "(제목 없음)" }),
           n.attachment_count
-            ? el("span", { class: "clip", text: "\u{1F4CE}" + n.attachment_count })
+            ? el("span", { class: "clip", title: "첨부파일" },
+                 [svgIcon(ICON_CLIP), String(n.attachment_count)])
             : null
         ]),
         el("div", { class: "line2", text: sub.join(" · ") || n.updated_at })
@@ -507,8 +691,8 @@ body { overflow: hidden; }
     var head = el("div", { class: "note-head" }, [
       backButton(),
       el("h2", { text: n.title || "(제목 없음)" }),
-      el("span", { class: "badge " + (isPub ? "warn" : "ok"),
-                   text: isPub ? ICON_PUBLIC + " 전체 공유" : ICON_PRIVATE + " 나만 보기" })
+      el("span", { class: "badge " + (isPub ? "warn" : "ok") },
+         [visIcon(isPub), isPub ? "전체 공유" : "나만 보기"])
     ]);
     viewBox.appendChild(head);
 

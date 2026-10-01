@@ -9,7 +9,8 @@
  *     대화 내용, 첨부 이미지, 관리자 설정, 개인 메모가 디스크에 남지 않아야 한다.
  *     메모 API(/api/notes)와 메모 첨부(/api/note-attachments)는 /api/ 규칙에
  *     이미 걸리지만, 의도를 분명히 하려고 /notes 를 목록에 함께 적어 둔다.
- *   - 캐시 대상은 로그인과 무관한 정적 리소스(아이콘/CSS/manifest)뿐이다.
+ *   - 캐시 대상은 로그인과 무관한 정적 리소스뿐이다.
+ *     아이콘, CSS, manifest, 그리고 내장 글꼴(Pretendard)이다.
  *
  * 그래서 오프라인일 때는 안내 페이지만 뜬다. 인증이 필요한 앱에서는
  * 이것이 올바른 절충이다.
@@ -17,11 +18,17 @@
  * VERSION 을 올리면 activate 에서 이전 캐시를 통째로 지운다.
  * v1 이 캐시해 둔 "/" 응답도 이때 함께 제거된다.
  */
-const VERSION = "claude-web-v4";
+const VERSION = "claude-web-v6";
 
 const SHELL = [
   "/manifest.webmanifest",
+  "/static/type.css",
   "/static/shared.css",
+  "/static/rail.css",
+  "/static/rail.js",
+  /* 내장 글꼴. 로그인과 무관한 정적 파일이라 캐시해도 된다.
+     여기서 빼면 오프라인일 때 글꼴만 빠져서 화면이 달라 보인다. */
+  "/static/fonts/PretendardVariable.woff2",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",
   "/static/icons/apple-touch-icon.png",
@@ -92,9 +99,16 @@ function offlinePage() {
   return new Response(
     "<!doctype html><meta charset='utf-8'>" +
     "<meta name='viewport' content='width=device-width,initial-scale=1'>" +
-    "<style>body{font-family:system-ui,-apple-system,'Segoe UI','Noto Sans KR',sans-serif;" +
-    "background:#17181c;color:#e8e8ea;display:grid;place-items:center;height:100dvh;margin:0;" +
-    "text-align:center;padding:24px}</style>" +
+    /* 이 페이지는 네트워크가 끊긴 상태에서 뜬다. 바깥 CSS 를 기다릴 수 없으니
+       색과 글꼴을 여기에 직접 적는다. 값은 shared.css 의 토큰과 같다. */
+    "<style>body{font-family:'Pretendard Variable',Pretendard,system-ui,-apple-system," +
+    "'Segoe UI','Apple SD Gothic Neo','Malgun Gothic',sans-serif;" +
+    "background:#eff3f6;color:#1f2933;display:grid;place-items:center;height:100dvh;margin:0;" +
+    "text-align:center;padding:24px;line-height:1.75}" +
+    "h2{font-weight:600;letter-spacing:-.005em;margin:0 0 8px}" +
+    "p{margin:0;color:#5a6772;font-size:14px}" +
+    "@media(prefers-color-scheme:dark){body{background:#14181c;color:#e7ecf0}" +
+    "p{color:#a3afb9}}</style>" +
     "<div><h2>오프라인</h2><p>서버에 연결할 수 없습니다.<br>네트워크를 확인한 뒤 새로고침해 주세요.</p></div>",
     { headers: { "Content-Type": "text/html; charset=utf-8" }, status: 503 }
   );

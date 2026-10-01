@@ -6,40 +6,142 @@
 <title>관리자 · Claude Web</title>
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#202126" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
 <link rel="stylesheet" href="/static/shared.css">
 <style>
-/* Storage 탭의 사용률 막대. 이 페이지에서만 쓰므로 shared.css 에 넣지 않는다. */
-.meter {
-  height: 10px;
-  margin: 0 0 14px;
-  border-radius: 999px;
-  background: var(--code-bg);
+@media (min-width: 900px) {
+  body { display: grid; grid-template-columns: 220px minmax(0, 1fr); }
+}
+
+/* 좁은 화면에서 왼쪽 레일 서랍을 여는 단추 */
+#rail-toggle {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+#rail-toggle:hover { background: var(--panel2); }
+#rail-toggle svg {
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
+  pointer-events: none;
+}
+
+/* 레일 오른쪽이 본문이다 */
+.shell-main { min-width: 0; }
+
+
+/* 화면 머리. 제목과 한 줄 설명 */
+.page-head { margin: 0 0 var(--s5); }
+.page-head h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.4;
+  letter-spacing: -.005em;
+}
+.page-head p {
+  margin: 5px 0 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+/* 막대 아래의 눈금. 27% 가 괜찮은 값인지 숫자만으로는 알 수 없다 */
+.meter-scale {
+  display: flex;
+  justify-content: space-between;
+  margin: -8px 0 var(--s4);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 무엇이 차지하고 있나. 표 대신 막대 목록 */
+.usage { display: flex; flex-direction: column; gap: var(--s3); }
+
+.usage-row { display: block; }
+
+.usage-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: 5px;
+}
+
+.usage-name { font-size: 14px; min-width: 0; }
+
+.usage-size {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
+}
+
+.usage-bar {
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--track);
   overflow: hidden;
 }
-.meter .fill { display: block; height: 100%; background: var(--ok-fg); }
+
+.usage-bar span {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+
+.usage-note { margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+
+/* 저장공간 구획의 사용률 막대. 이 화면에서만 쓰므로 shared.css 에 넣지 않는다.
+   예전에는 표의 격자 안에 얇은 선처럼 들어가 있었다. 두께를 키우고 양 끝을
+   둥글려서 표가 아니라 눈금으로 읽히게 한다. */
+.meter {
+  height: 12px;
+  margin: 0 0 var(--s4);
+  border-radius: var(--r-pill);
+  background: var(--track);
+  overflow: hidden;
+}
+.meter .fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--ok-fg);
+}
 .meter .fill.warn { background: var(--warn-fg); }
 .meter .fill.danger { background: var(--danger); }
+
+/* 현황 첫 화면의 숫자 칸은 두 줄짜리 카드 묶음이다. 좁아지면 두 칸씩 접힌다 */
+#alerts:not(:empty) { margin-bottom: var(--s4); }
 </style>
 </head>
 <body>
 
-<header class="top">
-  <span class="brand">Claude Web 관리자</span>
-  <span class="spacer"></span>
-  <a class="btn sm" href="/" style="text-decoration:none;">채팅</a>
-  <a class="btn sm" href="/notes" style="text-decoration:none;">메모</a>
-  <a class="btn sm" href="/logout" style="text-decoration:none;">로그아웃</a>
-</header>
+{% include "_rail.html" %}
 
-<nav class="tabs">
-  <a href="/admin/dashboard" class="{{ 'active' if tab == 'dashboard' }}">Dashboard</a>
-  <a href="/admin/users" class="{{ 'active' if tab == 'users' }}">Users</a>
-  <a href="/admin/claude" class="{{ 'active' if tab == 'claude' }}">Claude 설정</a>
-  <a href="/admin/system" class="{{ 'active' if tab == 'system' }}">System</a>
-  <a href="/admin/storage" class="{{ 'active' if tab == 'storage' }}">Storage</a>
-</nav>
+<div class="shell-main">
+
+<header class="top">
+  <button id="rail-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+  </button>
+  <span class="brand">{{ page_title }}</span>
+  <span class="spacer"></span>
+</header>
 
 <main class="page" id="page" data-tab="{{ tab }}">
   <!-- 알림은 content 밖에 둔다. render() 가 content 를 비우기 때문이다. -->
@@ -47,6 +149,9 @@
   <div id="content"></div>
 </main>
 
+</div><!-- /.shell-main -->
+
+<script src="/static/rail.js" defer></script>
 <script>
 (function () {
   "use strict";
@@ -93,6 +198,9 @@
           type: opts.inputType || "text",
           value: opts.value || "",
           placeholder: opts.placeholder || "",
+          /* placeholder 는 입력을 시작하면 사라진다. 이름 역할을 못 한다.
+             화면 낭독기가 읽을 이름은 따로 준다. */
+          "aria-label": opts.inputLabel || opts.title,
           autocomplete: opts.inputType === "password" ? "new-password" : "off"
         });
         box.appendChild(inp);
@@ -163,6 +271,37 @@
   }
 
   /* ------------------------------------------------------------ 공통 UI */
+  /* 화면 맨 위의 제목과 한 줄 설명. 상단 바의 이름만으로는 이 화면이
+     무엇을 하는 곳인지 알 수 없다. */
+  function pageHead(title, desc) {
+    return el("div", { class: "page-head" },
+      [el("h1", { text: title })].concat(desc ? [el("p", { text: desc })] : []));
+  }
+
+  /* 막대 아래 눈금. 지금 값이 어느 구간에 있는지 보이게 한다 */
+  function meterScale(th) {
+    return el("div", { class: "meter-scale" }, [
+      el("span", { text: "0" }),
+      el("span", { text: "주의 " + th.warn }),
+      el("span", { text: "경고 " + th.danger }),
+      el("span", { text: "100" })
+    ]);
+  }
+
+  /* 항목 하나가 전체에서 차지하는 몫을 막대로 보인다 */
+  function usageRow(name, sizeText, percent, note) {
+    var fill = el("span", {});
+    fill.style.width = Math.max(0, Math.min(100, percent)) + "%";
+    return el("div", { class: "usage-row" }, [
+      el("div", { class: "usage-line" }, [
+        el("span", { class: "usage-name", text: name }),
+        el("span", { class: "usage-size", text: sizeText })
+      ]),
+      el("div", { class: "usage-bar" }, [fill]),
+      note ? el("div", { class: "usage-note", text: note }) : null
+    ]);
+  }
+
   function block(title, desc, kids) {
     return el("section", { class: "block" },
       [el("h2", { text: title })]
@@ -276,12 +415,14 @@
       clear(content);
       var c = d.counts, p = d.provider;
 
+      content.appendChild(pageHead("현황", "로그인하면 관리자가 먼저 보는 화면입니다."));
+
       var w = warningsBlock(d.warnings);
       if (w) { content.appendChild(w); }
 
       content.appendChild(block("상태", null, [
         el("div", { class: "row", style: "margin-bottom:14px;" }, [
-          badge(true, "Database 정상"),
+          badge(true, "데이터베이스 정상"),
           badge(true, (p.label || p.provider) + " 사용 중", "ok"),
           p.provider === "cli"
             ? badge(p.found, p.found ? ("CLI " + (p.version || "확인됨")) : "CLI 경로 확인 필요")
@@ -297,8 +438,8 @@
           stat(c.users, "사용자"),
           stat(c.projects, "프로젝트"),
           stat(c.sessions, "전체 세션"),
-          stat(c.sessions_public, "Public 세션"),
-          stat(c.sessions_private, "Private 세션"),
+          stat(c.sessions_public, "전체 공개 세션"),
+          stat(c.sessions_private, "나만 보기 세션"),
           stat(c.messages, "메시지")
         ])
       ]));
@@ -321,7 +462,7 @@
         var users = r[1].users;
         var rows = r[0].sessions.filter(function (s) { return s.owner_id === null; })
           .map(function (s) {
-            var sel = el("select", {});
+            var sel = el("select", { "aria-label": "\"" + s.name + "\" 세션의 소유자" });
             sel.appendChild(el("option", { value: "", text: "(선택)" }));
             users.forEach(function (u) {
               sel.appendChild(el("option", { value: String(u.id),
@@ -353,12 +494,16 @@
     return api("GET", "/api/admin/users").then(function (d) {
       clear(content);
 
+      content.appendChild(pageHead("사용자", "계정을 만들고 권한과 상태를 바꿉니다."));
+
       /* 새 사용자 */
-      var fUser = el("input", { type: "text", placeholder: "아이디", autocapitalize: "none" });
-      var fName = el("input", { type: "text", placeholder: "표시 이름 (비우면 아이디)" });
+      var fUser = el("input", { type: "text", placeholder: "아이디", autocapitalize: "none",
+                                "aria-label": "아이디" });
+      var fName = el("input", { type: "text", placeholder: "표시 이름 (비우면 아이디)",
+                                "aria-label": "표시 이름" });
       var fPass = el("input", { type: "password", placeholder: "비밀번호 (8자 이상)",
-                                autocomplete: "new-password" });
-      var fRole = el("select", {}, [
+                                autocomplete: "new-password", "aria-label": "비밀번호" });
+      var fRole = el("select", { "aria-label": "권한" }, [
         el("option", { value: "user", text: "user" }),
         el("option", { value: "admin", text: "admin" })
       ]);
@@ -393,9 +538,10 @@
         });
     }
 
-    var roleSel = el("select", { class: "btn sm", onchange: function () {
-      patch({ role: this.value }, "권한을 변경했습니다.");
-    } }, [
+    var roleSel = el("select", { class: "btn sm",
+      "aria-label": u.username + " 의 권한", onchange: function () {
+        patch({ role: this.value }, "권한을 변경했습니다.");
+      } }, [
       el("option", { value: "user", text: "user" }),
       el("option", { value: "admin", text: "admin" })
     ]);
@@ -483,9 +629,12 @@
         } else {
           input = el("input", { type: "text", value: s.value, class: "mono" });
         }
+        /* label 은 있었지만 input 과 묶여 있지 않았다. for/id 로 연결한다.
+           묶여 있어야 낭독기가 이름을 읽고, 글자를 눌러도 칸에 초점이 간다. */
+        input.id = "setting-" + s.key.replace(/[^a-zA-Z0-9_-]/g, "-");
         inputs[s.key] = input;
 
-        var kids = [el("label", { text: s.label }), input];
+        var kids = [el("label", { text: s.label, "for": input.id }), input];
         if (s.help) { kids.push(el("div", { class: "help", text: s.help })); }
         if (s.restart) { kids.push(el("div", { class: "help", text: "※ 변경 시 서버 재시작 필요" })); }
         if (s.type === "secret" && s.has_value) {
@@ -511,6 +660,9 @@
           nodes[i].classList.toggle("hidden", g !== "" && g !== provider);
         }
       }
+
+      content.appendChild(pageHead("Claude 설정",
+        "어떤 방식으로 Claude 를 부를지 정합니다. 저장하면 다음 요청부터 적용됩니다."));
 
       content.appendChild(block("Claude 연결 방식",
         "배포와 분리된 운영 설정입니다. DB 에 저장되며 저장 즉시 다음 요청부터 적용됩니다.",
@@ -569,6 +721,9 @@
       .then(function (r) {
         clear(content);
         var d = r[0], s = d.system, p = d.provider;
+
+        content.appendChild(pageHead("시스템",
+          "서버가 지금 어떤 상태인지 보는 화면입니다."));
 
         var w = warningsBlock(d.warnings);
         if (w) { content.appendChild(w); }
@@ -659,10 +814,11 @@
         diskKids.push(el("div", { class: "row", style: "margin-bottom:10px" },
           [statusBadge(disk.status, disk.percent, th)]));
         diskKids.push(meter(disk.percent, disk.status));
+        diskKids.push(meterScale(th));
         diskKids.push(kv([
-          ["Total", bytes(disk.total)],
-          ["Used", bytes(disk.used) + " (" + disk.percent + "%)"],
-          ["Available", bytes(disk.free)],
+          ["전체 용량", bytes(disk.total)],
+          ["쓰는 중", bytes(disk.used) + " (" + disk.percent + "%)"],
+          ["남은 용량", bytes(disk.free)],
           ["측정 기준 경로", d.monitor_path, true]
         ]));
         if (disk.status !== "ok") {
@@ -675,28 +831,35 @@
         diskKids.push(el("div", { class: "alert warn",
           text: "디스크 정보를 읽을 수 없습니다. 경로를 확인하세요: " + d.monitor_path }));
       }
-      content.appendChild(block("Disk Usage",
+      content.appendChild(pageHead("저장공간",
+        "데이터 볼륨 기준입니다. 읽기만 하는 화면이라 지우는 기능은 두지 않았습니다."));
+      content.appendChild(block("디스크 사용량",
         "데이터가 실제로 저장되는 파일시스템 기준입니다. (컨테이너 root filesystem 이 아닙니다)",
         diskKids));
 
-      /* --- 애플리케이션 데이터 --- */
-      var rows = d.items.map(function (it) {
-        var note = "";
-        if (it.key === "workspace" && !it.configured) { note = "설정되지 않음"; }
-        else if (it.key === "other") { note = "데이터 루트의 기타 파일"; }
-        return el("tr", {}, [
-          el("td", { text: it.label }),
-          el("td", { class: "mono", text: bytes(it.bytes) }),
-          el("td", { class: "mono", text: it.files === null ? "-" : num(it.files) }),
-          el("td", { class: "muted", text: note })
-        ]);
-      });
-      rows.push(el("tr", {}, [
-        el("th", { text: "Total Application Data" }),
-        el("th", { class: "mono", text: bytes(d.app_total) }),
-        el("th", { text: "" }),
-        el("th", { text: "" })
-      ]));
+      /* --- 무엇이 차지하고 있나 ---
+         예전에는 네 칸짜리 표였다. 값을 읽으려면 숫자를 서로 비교해야 했다.
+         막대로 바꾸면 무엇이 큰지 한눈에 보인다. 큰 것부터 위로 올린다. */
+      var ITEM_NAMES = {
+        database: "데이터베이스",
+        chat: "채팅 첨부",
+        notes: "메모 첨부",
+        workspace: "작업 디렉터리",
+        backups: "백업",
+        other: "기타"
+      };
+      var total = d.app_total || 1;
+      var usage = d.items.slice().sort(function (a, b) { return b.bytes - a.bytes; })
+        .map(function (it) {
+          var parts = [];
+          if (it.files !== null) { parts.push("파일 " + num(it.files) + "개"); }
+          var pct = Math.round(it.bytes / total * 100);
+          if (it.bytes > 0) { parts.push("앱 데이터의 " + pct + "%"); }
+          if (it.key === "workspace" && !it.configured) { parts = ["설정되지 않음"]; }
+          else if (it.key === "other") { parts.push("데이터 루트의 기타 파일"); }
+          return usageRow(ITEM_NAMES[it.key] || it.label, bytes(it.bytes),
+                          it.bytes / total * 100, parts.join(", "));
+        });
 
       var refreshBtn = el("button", { class: "btn", type: "button", onclick: function () {
         this.disabled = true;
@@ -708,10 +871,11 @@
         });
       } }, ["새로고침"]);
 
-      content.appendChild(block("Application Data", null, [
-        table(["항목", "용량", "파일 수", ""], rows),
-        el("p", { class: "desc", text:
-          "계산 시각 " + d.computed_at + " · " + d.elapsed_ms + "ms 소요"
+      content.appendChild(block("무엇이 차지하고 있나", null, [
+        el("div", { class: "usage" }, usage),
+        el("p", { class: "desc", style: "margin:18px 0 0", text:
+          "합계 " + bytes(d.app_total)
+          + " · 계산 시각 " + d.computed_at + " · " + d.elapsed_ms + "ms 소요"
           + (d.cached ? " · 캐시된 값 (" + d.cache_age_sec + "초 전)" : " · 방금 계산") }),
         el("div", { class: "row" }, [refreshBtn])
       ]));
@@ -719,16 +883,16 @@
       /* --- 파일 수 / 제한 --- */
       var chatDisk = d.items.filter(function (i) { return i.key === "chat"; })[0];
       var noteDisk = d.items.filter(function (i) { return i.key === "notes"; })[0];
-      content.appendChild(block("Files", null, [
+      content.appendChild(block("파일", null, [
         kv([
-          ["Chat Attachments",
-           bytes(chatDisk.bytes) + " / " + num(chatDisk.files) + " files"],
-          ["Note Attachments",
-           bytes(noteDisk.bytes) + " / " + num(noteDisk.files) + " files"],
+          ["채팅 첨부파일",
+           bytes(chatDisk.bytes) + " / " + num(chatDisk.files) + "개"],
+          ["메모 첨부파일",
+           bytes(noteDisk.bytes) + " / " + num(noteDisk.files) + "개"],
           ["메모 개수", num(d.notes.total) + " (공유 " + num(d.notes.public) + ")"],
-          ["Chat Attachment Limit",
+          ["채팅 첨부 한도",
            d.limits.chat_attachment_mb + " MB × 최대 " + d.limits.chat_max_files + "개"],
-          ["Note Attachment Limit",
+          ["메모 첨부 한도",
            d.limits.note_attachment_mb + " MB × 최대 " + d.limits.note_max_files + "개"]
         ]),
         el("p", { class: "desc", text:
@@ -750,7 +914,7 @@
         });
         content.appendChild(block("사용자별 첨부파일 사용량",
           "DB 에 기록된 파일 크기 합계입니다. 사용량이 0 인 사용자는 표시하지 않습니다.",
-          [table(["사용자", "Chat", "Notes", "Total"], urows)]));
+          [table(["사용자", "채팅", "메모", "합계"], urows)]));
       }
 
       content.appendChild(block("안내", null, [

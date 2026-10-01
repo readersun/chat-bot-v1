@@ -80,7 +80,9 @@ claude-web/
 │   ├── admin.html       관리자 (Dashboard / Users / Claude / System / Storage)
 │   └── error.html       403 / 404 등
 ├── static/
-│   ├── shared.css       로그인·관리자 공용 스타일
+│   ├── type.css         @font-face 한 곳 (Pretendard)
+│   ├── fonts/           내장 글꼴 + OFL 라이선스 원문
+│   ├── shared.css       로그인·관리자·메모 공용 스타일
 │   ├── manifest.webmanifest
 │   ├── sw.js            서비스워커
 │   └── icons/

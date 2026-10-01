@@ -1,62 +1,108 @@
 /* =========================================================================
    claude-web 공용 스타일
-   로그인 / 최초 설정 / 관리자 / 오류 페이지가 함께 쓴다.
-   (채팅 화면 index.html 은 자체 스타일을 그대로 유지한다)
+   로그인 / 최초 설정 / 관리자 / 메모 / 오류 페이지가 함께 쓴다.
+   (채팅 화면 index.html 은 자체 스타일을 그대로 유지한다. 토큰 값은 같다)
+
+   모양의 원칙
+     1. 테두리로 칸을 나누지 않는다. 흰 면과 옅은 두 겹 그림자로 층을 만든다.
+        1px 선은 표의 행 구분처럼 정말 필요한 데만 남긴다.
+     2. 모서리는 12 / 18 / 24 를 쓴다. 칩과 배지와 아바타는 완전한 원이다.
+     3. 굵기는 600 까지만 쓴다. 700 은 한글 획이 뭉쳐 딱딱해진다.
+     4. 글자를 대문자로 바꾸지 않는다. 한글에는 효과가 없고 영문은 사나워진다.
+     5. 자간은 제목에서만 아주 살짝 좁힌다. 본문은 건드리지 않는다.
    ========================================================================= */
 :root {
-  --header-h: 56px;
-  --radius: 12px;
-  --radius-sm: 8px;
-  --tap: 44px;
+  /* ---- 치수 ---- */
+  --header-h: 60px;
+  --r-sm: 12px;          /* 입력칸, 작은 버튼 */
+  --r: 18px;             /* 버튼, 알림, 목록 행 */
+  --r-lg: 24px;          /* 카드, 판 */
+  --r-pill: 999px;       /* 칩, 배지, 아바타 */
+  --tap: 46px;
   --app-h: 100dvh;
+  --page-max: 1060px;
 
+  /* 여백 단계. 6 / 8 / 12 / 16 / 20 / 24 만 쓴다 */
+  --s1: 6px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+
+  /* ---- 안전 영역 ---- */
   --sa-top: env(safe-area-inset-top, 0px);
   --sa-bottom: env(safe-area-inset-bottom, 0px);
   --sa-left: env(safe-area-inset-left, 0px);
   --sa-right: env(safe-area-inset-right, 0px);
 
-  --bg: #f7f7f8;
-  --panel: #ffffff;
-  --panel2: #fbfbfc;
-  --border: #e3e3e6;
-  --text: #1f2024;
-  --muted: #6b6f76;
-  --code-bg: #f3f3f5;
-  --accent: #3d5afe;
-  --accent-soft: #eaeeff;
-  --ok-bg: #e7f6ec;
-  --ok-fg: #1b6e35;
-  --warn-bg: #fff4e0;
-  --warn-fg: #8a5a00;
-  --error-bg: #fdecec;
-  --error-fg: #a11414;
-  --danger: #c62828;
-  --shadow: 0 8px 28px rgba(0, 0, 0, .18);
+  /* ---- 색 ----
+     중립 회색은 차갑다. 바닥까지 아주 옅은 청색을 섞어 둔다. */
+  --bg: #eff3f6;         /* 바닥 */
+  --panel: #ffffff;      /* 판 */
+  --panel2: #f6f8fa;     /* 오목한 면 (입력칸, 보조 버튼) */
+  --line: #b4bfc9;       /* 선과 점. 표 머리글 아래처럼 꼭 필요한 데만 */
+  --border: #dde4ea;     /* 남겨 둔 아주 옅은 선 */
+  --text: #1f2933;       /* 먹 */
+  --muted: #5a6772;      /* 흐린 먹. 흰 바닥에서 5.6:1 */
+  --code-bg: #f1f4f7;
+  --track: #cfdce8;      /* 막대 바탕 */
+  --accent: #2f6ba8;     /* 강청. 흰 바닥에서 5.4:1 */
+  --accent-press: #255788;
+  --accent-soft: #e4edf7;
+  /* 채워진 강조색/위험색 위에 올리는 글자색.
+     밝은 화면에서는 흰 글씨지만, 어두운 화면에서는 바탕색이 밝아져서
+     흰 글씨를 얹으면 대비가 2:1 근처까지 떨어진다. 그때는 먹 글씨를 쓴다. */
+  --on-accent: #ffffff;
+  --on-danger: #ffffff;
+  --ok-bg: #e8f3ec;
+  --ok-fg: #2b754e;
+  --warn-bg: #fbf2e4;
+  --warn-fg: #8a5a16;
+  --error-bg: #fbefef;
+  --error-fg: #a83232;
+  --danger: #a83232;
+
+  /* ---- 그림자 세 개. 이 밖의 조합은 쓰지 않는다 ---- */
+  --sh-card: 0 1px 2px rgba(31, 41, 51, .04), 0 6px 18px rgba(31, 41, 51, .05);
+  --sh-float: 0 2px 4px rgba(31, 41, 51, .05), 0 10px 30px rgba(31, 41, 51, .08);
+  --sh-modal: 0 8px 24px rgba(31, 41, 51, .10), 0 24px 64px rgba(31, 41, 51, .16);
+  --shadow: var(--sh-modal);   /* 예전 이름. 쓰는 곳이 남아 있어 유지한다 */
 }
 
 @supports not (height: 100dvh) {
   :root { --app-h: 100vh; }
 }
 
+/* 밝은 화면이 기준이다. 어두운 화면은 같은 색조를 어둡게 옮긴 것이다.
+   중립 회색으로 바꾸지 않는다. 청색기를 남겨야 두 화면이 같은 제품으로 보인다. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17181c;
-    --panel: #202126;
-    --panel2: #1b1c21;
-    --border: #32343b;
-    --text: #e8e8ea;
-    --muted: #9aa0a8;
-    --code-bg: #15161a;
-    --accent: #7c8cff;
-    --accent-soft: #2a2f4a;
-    --ok-bg: #1e3527;
-    --ok-fg: #86e0a5;
-    --warn-bg: #3a2f17;
-    --warn-fg: #f0c078;
-    --error-bg: #3a1f1f;
-    --error-fg: #ff9c9c;
-    --danger: #ef5350;
-    --shadow: 0 8px 28px rgba(0, 0, 0, .5);
+    --bg: #14181c;
+    --panel: #1d2328;
+    --panel2: #191e23;
+    --line: #3a444d;
+    --border: #2b333a;
+    --text: #e7ecf0;
+    --muted: #a3afb9;
+    --code-bg: #151a1f;
+    --track: #2f3e4b;
+    --accent: #86b2de;
+    --accent-press: #a6c8e9;
+    --accent-soft: #253645;
+    --on-accent: #12171c;
+    --on-danger: #12171c;
+    --ok-bg: #1d3327;
+    --ok-fg: #7fce9f;
+    --warn-bg: #35291a;
+    --warn-fg: #e2b36a;
+    --error-bg: #35201f;
+    --error-fg: #f09a9a;
+    --danger: #ef6b6b;
+
+    --sh-card: 0 1px 2px rgba(0, 0, 0, .30), 0 6px 18px rgba(0, 0, 0, .28);
+    --sh-float: 0 2px 4px rgba(0, 0, 0, .34), 0 10px 30px rgba(0, 0, 0, .38);
+    --sh-modal: 0 8px 24px rgba(0, 0, 0, .44), 0 24px 64px rgba(0, 0, 0, .52);
   }
 }
 
@@ -67,21 +113,51 @@ body {
   min-height: var(--app-h);
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR",
-        "Apple SD Gothic Neo", "Malgun Gothic", Roboto, sans-serif;
+  /* Pretendard 는 static/type.css 가 담아 온다. 그 파일을 못 받아 와도
+     이 목록이 남아 있어서 본문이 세리프로 떨어지지 않는다. */
+  font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+               system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
   overflow-wrap: anywhere;
 }
+
+h1, h2, h3 { letter-spacing: -.005em; font-weight: 600; }
 
 img, svg { max-width: 100%; height: auto; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 a { color: var(--accent); }
+a:hover { color: var(--accent-press); }
 
 /* display 를 지정한 클래스가 브라우저 기본 [hidden] 규칙을 덮어쓰지 못하게 한다 */
 [hidden] { display: none !important; }
+
+/* 클래스를 붙이지 않고 놓인 입력칸도 같은 모양이어야 한다.
+   관리자 화면은 표 안에 input/select 를 직접 만들어 넣는 곳이 있다.
+   그대로 두면 그 자리만 브라우저 기본 네모가 되어 혼자 튄다. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+select,
+textarea {
+  min-height: var(--tap);
+  padding: 11px 15px;
+  background: var(--panel2);
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text);
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--panel);
+}
+
+select { padding-right: var(--s2); }
 
 /* ------------------------------------------------------------------ 폼 카드 */
 .center-wrap {
@@ -89,80 +165,141 @@ a { color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: calc(24px + var(--sa-top)) 16px calc(24px + var(--sa-bottom));
+  padding: calc(var(--s6) + var(--sa-top)) var(--s4) calc(var(--s6) + var(--sa-bottom));
 }
 
 .card {
   width: 100%;
-  max-width: 420px;
+  max-width: 436px;
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 28px 24px;
+  border: 0;
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  padding: 32px 30px;
 }
 
-.card h1 {
-  margin: 0 0 4px;
-  font-size: 20px;
+/* 항목이 많은 폼(최초 설정)은 한 단으로 두면 너무 길어진다. 조금 넓힌다 */
+.card.wide { max-width: 520px; }
+
+/* 로그인 카드 머리의 둥근 표식. 로고 이미지를 따로 두지 않는다 */
+.card .brandmark {
+  width: 46px;
+  height: 46px;
+  margin: 0 0 var(--s5);
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+  font-weight: 600;
   letter-spacing: -.01em;
 }
 
-.card .sub {
-  margin: 0 0 20px;
+/* 오류 화면의 둥근 표식. 큰 숫자를 화면 가운데에 그대로 놓으면
+   무슨 일이 생겼는지보다 숫자가 먼저 눈에 들어온다. 숫자는 여기에 담고
+   제목 자리에는 사람이 읽을 문장을 둔다. */
+.card .glyph {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto var(--s4);
+  border-radius: var(--r-pill);
+  background: var(--panel2);
   color: var(--muted);
-  font-size: 13px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
-.field { margin-bottom: 14px; }
+.card h1 {
+  margin: 0 0 var(--s1);
+  font-size: 22px;
+  line-height: 1.4;
+}
+
+.card .sub {
+  margin: 0 0 var(--s5);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.field { margin-bottom: var(--s4); }
 
 .field label {
   display: block;
-  margin-bottom: 6px;
-  font-size: 13px;
+  margin-bottom: 7px;
+  font-size: 12.5px;
   font-weight: 600;
+  line-height: 1.6;
   color: var(--muted);
 }
 
+/* 입력칸은 테두리 대신 오목한 면으로 표시한다.
+   초점은 :focus-visible 이 아니라 :focus 로 잡는다. 키보드로 들어왔을 때만
+   윤곽선이 뜨면 마우스 사용자는 어디에 입력하는지 알 수 없다. */
 .field input, .field select, .field textarea {
   width: 100%;
   min-height: var(--tap);
-  padding: 10px 12px;
+  padding: 12px 15px;
   background: var(--panel2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--r-sm);
   color: var(--text);
 }
 
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--panel);
+}
+
 .field .help {
-  margin-top: 5px;
-  font-size: 12px;
+  margin-top: var(--s1);
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--muted);
 }
 
 /* ------------------------------------------------------------------- 버튼 */
 .btn {
   min-height: var(--tap);
-  padding: 0 16px;
+  padding: 0 var(--s5);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--s1);
   background: var(--panel2);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 14px;
+  border: 0;
+  border-radius: var(--r);
+  font-size: 14.5px;
   font-weight: 600;
+  line-height: 1.2;
+  transition: background-color .14s ease, color .14s ease;
 }
 
-.btn:hover:not(:disabled) { border-color: var(--accent); }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.danger { color: var(--danger); border-color: var(--border); }
-.btn.danger:hover:not(:disabled) { border-color: var(--danger); }
+.btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-press); }
+.btn:active:not(:disabled) { background: var(--track); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.btn.primary { background: var(--accent); color: var(--on-accent); }
+.btn.primary:hover:not(:disabled) { background: var(--accent-press); color: var(--on-accent); }
+.btn.primary:active:not(:disabled) { background: var(--accent-press); }
+
+/* 위험한 동작은 빨간 글씨가 아니라 옅은 붉은 면으로 표시한다.
+   글자색만 바꾸면 색을 구별하지 못하는 사람에게는 아무 신호가 되지 않는다. */
+.btn.danger { background: var(--error-bg); color: var(--danger); }
+.btn.danger:hover:not(:disabled) { background: var(--danger); color: var(--on-danger); }
+
 .btn.block { width: 100%; }
-.btn.sm { min-height: 34px; padding: 0 10px; font-size: 13px; }
+.btn.sm { min-height: 36px; padding: 0 var(--s3); font-size: 13.5px; border-radius: var(--r-sm); }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+}
 
 /* ------------------------------------------------------------------- 모달 */
 /* 브라우저 기본 prompt/confirm 대신 쓰는 다이얼로그. 채팅 화면과 모양을 맞춘다 */
@@ -170,29 +307,30 @@ a { color: var(--accent); }
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: rgba(0, 0, 0, .5);
+  background: rgba(20, 28, 36, .42);
   display: grid;
   place-items: center;
-  padding: max(16px, var(--sa-top)) 16px calc(16px + var(--sa-bottom));
+  padding: max(var(--s4), var(--sa-top)) var(--s4) calc(var(--s4) + var(--sa-bottom));
 }
 
 .modal {
   width: 100%;
-  max-width: 420px;
+  max-width: 460px;
   max-height: 100%;
   overflow-y: auto;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  padding: var(--s6);
+  border: 0;
+  border-radius: var(--r-lg);
   background: var(--panel);
-  box-shadow: var(--shadow);
+  box-shadow: var(--sh-modal);
 }
 
-.modal h3 { margin: 0 0 10px; font-size: 16px; }
+.modal h3 { margin: 0 0 var(--s2); font-size: 18px; line-height: 1.45; }
 
 .modal p {
-  margin: 0 0 12px;
-  font-size: 13px;
+  margin: 0 0 var(--s3);
+  font-size: 14px;
+  line-height: 1.75;
   color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -201,29 +339,34 @@ a { color: var(--accent); }
 .modal input {
   width: 100%;
   min-height: var(--tap);
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: 12px 15px;
+  border: 0;
+  border-radius: var(--r-sm);
   background: var(--panel2);
   color: var(--text);
 }
 
-.modal input:focus { outline: none; border-color: var(--accent); }
+.modal input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--panel);
+}
 
 .modal .actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 14px;
+  gap: var(--s2);
+  margin-top: var(--s5);
 }
 
 /* ------------------------------------------------------------------- 알림 */
 .alert {
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  margin-bottom: 14px;
-  border: 1px solid transparent;
+  padding: 13px var(--s4);
+  border-radius: var(--r);
+  font-size: 14px;
+  line-height: 1.7;
+  margin-bottom: var(--s4);
+  border: 0;
 }
 
 .alert.error { background: var(--error-bg); color: var(--error-fg); }
@@ -231,12 +374,13 @@ a { color: var(--accent); }
 .alert.warn { background: var(--warn-bg); color: var(--warn-fg); }
 
 .alert pre {
-  margin: 8px 0 0;
-  padding: 8px;
-  background: var(--code-bg);
-  border-radius: 6px;
+  margin: var(--s2) 0 0;
+  padding: var(--s3);
+  background: rgba(31, 41, 51, .05);
+  border-radius: var(--r-sm);
   overflow-x: auto;
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -245,97 +389,77 @@ a { color: var(--accent); }
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 12px;
+  gap: var(--s1);
+  padding: 3px 11px;
+  border-radius: var(--r-pill);
+  font-size: 12.5px;
   font-weight: 600;
+  line-height: 1.6;
   background: var(--panel2);
-  border: 1px solid var(--border);
+  border: 0;
   color: var(--muted);
 }
 
-.badge.ok { background: var(--ok-bg); color: var(--ok-fg); border-color: transparent; }
-.badge.bad { background: var(--error-bg); color: var(--error-fg); border-color: transparent; }
-.badge.warn { background: var(--warn-bg); color: var(--warn-fg); border-color: transparent; }
+.badge.ok { background: var(--ok-bg); color: var(--ok-fg); }
+.badge.bad { background: var(--error-bg); color: var(--error-fg); }
+.badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
 
-.dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.dot { width: 7px; height: 7px; border-radius: var(--r-pill); background: currentColor; }
 
 /* ------------------------------------------------------------- 관리자 셸 */
+/* 상단 바에 밑줄을 그리지 않는다. 바닥이 옅은 청색이라 흰 면만으로 층이 보인다 */
 .top {
   position: sticky;
   top: 0;
   z-index: 5;
   min-height: var(--header-h);
-  padding: calc(var(--sa-top)) 16px 0;
+  padding: var(--sa-top) max(var(--s5), var(--sa-right)) 0 max(var(--s5), var(--sa-left));
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--s3);
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0;
 }
 
-.top .brand { font-weight: 700; letter-spacing: -.01em; }
+.top .brand { font-weight: 600; font-size: 16px; letter-spacing: -.005em; }
 .top .spacer { flex: 1; }
 
-.tabs {
-  display: flex;
-  gap: 4px;
-  padding: 8px 16px 0;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tabs::-webkit-scrollbar { display: none; }
-
-.tabs a {
-  padding: 8px 12px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  border: 1px solid transparent;
-  border-bottom: none;
-  color: var(--muted);
-  text-decoration: none;
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.tabs a.active {
-  color: var(--text);
-  background: var(--bg);
-  border-color: var(--border);
-  margin-bottom: -1px;
-}
-
 main.page {
-  max-width: 1000px;
+  max-width: var(--page-max);
   margin: 0 auto;
-  padding: 20px 16px calc(40px + var(--sa-bottom));
+  padding: var(--s5) max(var(--s5), var(--sa-left)) calc(40px + var(--sa-bottom)) max(var(--s5), var(--sa-right));
 }
 
 section.block {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
-  margin-bottom: 16px;
+  border: 0;
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  padding: var(--s6);
+  margin-bottom: var(--s4);
 }
 
 section.block > h2 {
-  margin: 0 0 4px;
-  font-size: 15px;
+  margin: 0 0 var(--s1);
+  font-size: 16px;
+  line-height: 1.5;
 }
 
 section.block > .desc {
-  margin: 0 0 16px;
-  font-size: 13px;
+  margin: 0 0 var(--s5);
+  font-size: 13.5px;
+  line-height: 1.7;
   color: var(--muted);
 }
 
 /* ------------------------------------------------------------------- 표 */
-.table-wrap { overflow-x: auto; }
+/* 격자를 그리지 않는다. 세로선은 지우고 가로선만 아주 옅게 남긴다 */
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--r-sm);
+  background: var(--panel2);
+  padding: var(--s1) var(--s2) var(--s2);
+}
 
 table {
   width: 100%;
@@ -344,21 +468,29 @@ table {
 }
 
 th, td {
-  padding: 9px 10px;
+  padding: 11px var(--s3);
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: middle;
   white-space: nowrap;
 }
 
-th { font-size: 12px; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+
+th {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom-color: var(--line);
+}
+
 td.wrap { white-space: normal; }
 
 /* ------------------------------------------------------------- 정보 목록 */
 .kv {
   display: grid;
-  grid-template-columns: minmax(140px, auto) minmax(0, 1fr);
-  gap: 8px 16px;
+  grid-template-columns: minmax(150px, auto) minmax(0, 1fr);
+  gap: var(--s3) var(--s5);
   font-size: 14px;
 }
 
@@ -367,30 +499,57 @@ td.wrap { white-space: normal; }
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  gap: var(--s3);
 }
 
+/* 숫자 칸. 테두리 대신 오목한 면으로 둔다 */
 .stat {
   background: var(--panel2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px;
+  border: 0;
+  border-radius: var(--r);
+  padding: var(--s4) var(--s5);
 }
 
-.stat .n { font-size: 22px; font-weight: 700; }
-.stat .l { font-size: 12px; color: var(--muted); }
+.stat .n {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat .l { font-size: 12.5px; line-height: 1.6; color: var(--muted); }
 
 /* ------------------------------------------------------------------ 기타 */
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+.row { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
+  font-size: 13px;
+}
+
 .muted { color: var(--muted); }
 .hidden { display: none !important; }
 
+/* 손가락으로 누르는 기기에서는 모든 조작 요소를 44px 이상으로 키운다.
+   마우스가 있는 화면에서는 작은 단추가 정보 밀도에 도움이 되지만,
+   손가락에는 44px 아래가 잘 안 눌린다. */
+@media (pointer: coarse) {
+  .btn.sm { min-height: var(--tap); padding: 0 var(--s4); }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select,
+  textarea { min-height: var(--tap); }
+}
+
 @media (max-width: 600px) {
-  .card { padding: 22px 18px; border-radius: var(--radius); }
-  main.page { padding: 16px 12px calc(40px + var(--sa-bottom)); }
-  section.block { padding: 14px; }
+  :root { --s5: 16px; --s6: 18px; }
+  .card { padding: 26px 22px; }
+  main.page { padding: var(--s4) var(--s3) calc(40px + var(--sa-bottom)); }
+  section.block { padding: var(--s5); }
+  .top { padding-left: max(var(--s4), var(--sa-left)); padding-right: max(var(--s4), var(--sa-right)); }
   .kv { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
-  .kv dd { margin-bottom: 10px; }
+  .kv dd { margin-bottom: var(--s3); }
+  .stat { padding: var(--s3) var(--s4); }
+  .stat .n { font-size: 26px; }
 }
