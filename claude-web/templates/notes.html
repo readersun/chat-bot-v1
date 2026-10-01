@@ -166,7 +166,7 @@ body { overflow: hidden; }
   color: var(--muted);
 }
 .item.active .vis { color: var(--accent-press); }
-.item .vis svg, .item .clip svg, .badge svg {
+.item .vis svg, .item .clip svg, .badge svg, .radios label svg {
   width: 14px;
   height: 14px;
   display: block;
@@ -791,9 +791,9 @@ body { overflow: hidden; }
       el("label", { text: "공개 범위" }),
       el("div", { class: "radios" }, [
         el("label", { for: "vis-private" },
-          [rPrivate, ICON_PRIVATE + " 나만 보기"]),
+          [rPrivate, visIcon(false), "나만 보기"]),
         el("label", { for: "vis-public" },
-          [rPublic, ICON_PUBLIC + " 전체 공유"])
+          [rPublic, visIcon(true), "전체 공유"])
       ])
     ]));
 
