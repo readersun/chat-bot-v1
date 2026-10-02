@@ -65,6 +65,11 @@ body { overflow: hidden; }
 
 .card {
   box-sizing: border-box;
+  /* shared.css 의 .card 는 로그인/최초설정 카드용이라 max-width: 436px 이 걸려
+     있다. 풀지 않으면 이 화면의 표와 탭이 전부 436px 안으로 접혀서 넓은
+     화면에서도 모바일처럼 보인다. 여기 카드는 본문 폭을 다 쓴다. */
+  width: 100%;
+  max-width: none;
   padding: var(--s4) var(--s5) var(--s3);
   border-radius: var(--r-lg);
   background: var(--panel);

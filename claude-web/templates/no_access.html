@@ -40,7 +40,11 @@ body { overflow: hidden; }
 }
 
 .card {
+  /* 폭은 위 width 가 정한다. shared.css 의 .card 에는 로그인 카드용
+     max-width: 436px 이 걸려 있어서, 풀지 않으면 520px 로 적어 둔 것이
+     436px 로 깎인다. */
   width: min(520px, 100%);
+  max-width: none;
   box-sizing: border-box;
   padding: 40px 40px 32px;
   border-radius: var(--r-lg);
