@@ -5,7 +5,9 @@
  *   - 앱 셸("/")은 더 이상 캐시하지 않는다.
  *     로그인 후의 "/" 응답에는 로그인한 사용자 이름과 CSRF 토큰이 들어간다.
  *     이를 캐시하면 같은 기기를 쓰는 다른 사람에게 노출될 수 있다.
- *   - /api/*, /admin/*, /notes, /login, /logout, /setup 도 캐시하지 않는다.
+ *   - /api/*, /admin/*, /notes, /patch, /login, /logout, /setup 도 캐시하지 않는다.
+ *   - /patch 와 /_patch/ 는 특히 중요하다. 패치 tar 는 GB 단위라 캐시에
+ *     들어가면 사용자 노트북 디스크가 찬다.
  *     대화 내용, 첨부 이미지, 관리자 설정, 개인 메모가 디스크에 남지 않아야 한다.
  *     메모 API(/api/notes)와 메모 첨부(/api/note-attachments)는 /api/ 규칙에
  *     이미 걸리지만, 의도를 분명히 하려고 /notes 를 목록에 함께 적어 둔다.
@@ -18,7 +20,7 @@
  * VERSION 을 올리면 activate 에서 이전 캐시를 통째로 지운다.
  * v1 이 캐시해 둔 "/" 응답도 이때 함께 제거된다.
  */
-const VERSION = "chat-bot-v7";
+const VERSION = "chat-bot-v9";
 
 const SHELL = [
   "/manifest.webmanifest",
@@ -35,7 +37,8 @@ const SHELL = [
 ];
 
 // 어떤 경우에도 캐시하지 않을 경로
-const NEVER_CACHE = ["/api/", "/admin", "/notes", "/login", "/logout", "/setup",
+const NEVER_CACHE = ["/api/", "/admin", "/notes", "/patch", "/_patch/",
+                     "/no-access", "/login", "/logout", "/setup",
                      "/health", "/sw.js"];
 
 function isPrivate(pathname) {

@@ -25,6 +25,7 @@ import sys
 from flask import Blueprint, abort, jsonify, render_template, request
 
 import config
+import permissions as _perm
 import providers
 import settings_store
 import storage as storage_module
@@ -76,6 +77,7 @@ def _page(tab):
         me=public_user(current_user()),
         # 이 블루프린트는 통째로 @admin_required 다. 여기에 도달했다면 관리자다.
         is_admin=True,
+        menus=list(_perm.MENUS),
         rail=tab,
     )
 
@@ -273,8 +275,21 @@ def list_users():
     for r in rows:
         d = public_user(r)
         d["session_count"] = r["session_count"]
+        # 메뉴 권한을 함께 준다. 사용자마다 따로 물으면 N+1 번 왕복한다.
+        d["menus"] = sorted(_perm.user_menus(db, r))
+        d["patch_all_sites"] = _perm.patch_all_sites(r)
+        d["patch_site_count"] = db.execute(
+            "SELECT COUNT(*) c FROM user_patch_sites WHERE user_id = ?",
+            (r["id"],)).fetchone()["c"]
         out.append(d)
-    return jsonify(ok=True, users=out)
+    sites = db.execute(
+        "SELECT s.id, s.name, s.label, r.label AS root_label"
+        "  FROM patch_sites s JOIN patch_roots r ON r.id = s.root_id"
+        " WHERE s.is_visible = 1 ORDER BY s.name").fetchall()
+    return jsonify(ok=True, users=out,
+                   all_menus=[{"key": k, "label": _perm.MENU_LABELS[k]}
+                              for k in _perm.MENUS],
+                   sites=[{k: x[k] for k in x.keys()} for x in sites])
 
 
 @api.post("/users")
@@ -481,3 +496,79 @@ def audit_log():
         "SELECT a.*, u.username FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id "
         "ORDER BY a.id DESC LIMIT ?", (limit,)).fetchall()
     return jsonify(ok=True, logs=[row_to_dict(r) for r in rows])
+
+
+# ---------------------------------------------------------------------------
+# 메뉴 권한과 패치 사이트 범위 (v6)
+#
+# 레일에서 항목을 안 그리는 것은 장식이다. 실제로 막는 곳은 각 라우트의
+# menu_required 다. 여기서는 그 근거가 되는 행을 고칠 뿐이다.
+# ---------------------------------------------------------------------------
+
+@api.get("/users/<int:uid>/menus")
+@admin_required
+def get_user_menus(uid):
+    db = get_db()
+    row = user_by_id(db, uid)
+    if row is None:
+        abort(404, "사용자를 찾을 수 없습니다.")
+    sites = db.execute(
+        "SELECT s.id, s.name, s.label, r.label AS root_label"
+        "  FROM patch_sites s JOIN patch_roots r ON r.id = s.root_id"
+        " WHERE s.is_visible = 1 ORDER BY s.name").fetchall()
+    chosen = [r["site_id"] for r in db.execute(
+        "SELECT site_id FROM user_patch_sites WHERE user_id = ?", (uid,)).fetchall()]
+    return jsonify(
+        ok=True,
+        menus=sorted(_perm.user_menus(db, row)),
+        all_menus=[{"key": k, "label": _perm.MENU_LABELS[k]} for k in _perm.MENUS],
+        is_admin=_perm.is_admin(row),
+        patch_all_sites=_perm.patch_all_sites(row),
+        patch_site_ids=chosen,
+        sites=[{k: s[k] for k in s.keys()} for s in sites],
+    )
+
+
+@api.put("/users/<int:uid>/menus")
+@admin_required
+def put_user_menus(uid):
+    db = get_db()
+    row = user_by_id(db, uid)
+    if row is None:
+        abort(404, "사용자를 찾을 수 없습니다.")
+    data = request.get_json(silent=True) or {}
+
+    # 관리자는 메뉴 표와 무관하게 전부 가진다. 행을 고쳐도 아무 효과가 없으니
+    # 화면이 켜진 체크상자를 잠그고, 여기서도 분명히 거절한다.
+    if _perm.is_admin(row):
+        abort(400, "관리자는 모든 메뉴를 가집니다. 메뉴를 따로 지정할 수 없습니다.")
+
+    keys = data.get("menus")
+    if keys is not None:
+        if not isinstance(keys, list):
+            abort(400, "menus 는 목록이어야 합니다.")
+        bad = [k for k in keys if k not in _perm.MENUS]
+        if bad:
+            abort(400, "없는 메뉴입니다: %s" % ", ".join(str(b) for b in bad))
+        _perm.set_user_menus(db, uid, keys, current_user()["id"])
+        audit(db, current_user()["id"], "user_menus_changed", "user", uid,
+              "menus=%s" % ",".join(sorted(keys)))
+
+    if "patch_all_sites" in data or "patch_site_ids" in data:
+        all_sites = bool(data.get("patch_all_sites", True))
+        ids = data.get("patch_site_ids") or []
+        if not isinstance(ids, list):
+            abort(400, "patch_site_ids 는 목록이어야 합니다.")
+        try:
+            kept = _perm.set_user_patch_sites(db, uid, all_sites, ids,
+                                              current_user()["id"])
+        except (TypeError, ValueError):
+            abort(400, "사이트 id 가 올바르지 않습니다.")
+        audit(db, current_user()["id"], "user_patch_sites_changed", "user", uid,
+              "all=%s n=%d" % (all_sites, len(kept)))
+
+    db.commit()
+    fresh = user_by_id(db, uid)
+    return jsonify(ok=True,
+                   menus=sorted(_perm.user_menus(db, fresh)),
+                   patch_all_sites=_perm.patch_all_sites(fresh))

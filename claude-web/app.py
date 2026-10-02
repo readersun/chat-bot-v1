@@ -45,9 +45,12 @@ from flask import (
 from werkzeug.exceptions import HTTPException
 
 import admin as admin_module
+import admin_patch as admin_patch_module
 import auth
 import config
 import notes as notes_module
+import patch as patch_module
+import patch_scan
 import permissions
 import providers
 import settings_store
@@ -94,6 +97,10 @@ app.register_blueprint(admin_module.bp)
 app.register_blueprint(admin_module.api)
 app.register_blueprint(notes_module.bp)
 app.register_blueprint(notes_module.api)
+app.register_blueprint(patch_module.bp)
+app.register_blueprint(patch_module.api)
+app.register_blueprint(admin_patch_module.bp)
+app.register_blueprint(admin_patch_module.api)
 
 
 # ---------------------------------------------------------------------------
@@ -475,12 +482,25 @@ def handle_error(exc):  # pragma: no cover
 @app.get("/")
 @auth.login_required
 def index():
+    """
+    채팅 화면. 채팅 메뉴가 없는 사람은 여기서 막히면 안 된다.
+
+    "/" 는 로그인 직후 모두가 거쳐 가는 자리다. 여기서 403 을 내면 메모만
+    가진 사람은 로그인하자마자 아무것도 못 하게 된다. 그래서 막는 대신
+    그 사람이 가진 메뉴 중 첫 번째로 보낸다. 하나도 없으면 안내 화면이다.
+    """
     user = auth.current_user()
+    db = get_db()
+    menus = permissions.user_menus(db, user)
+    if "chat" not in menus:
+        dest = permissions.landing_path(db, user)
+        return redirect(dest if dest else url_for("no_access"))
     return render_template(
         "index.html",
         csrf=auth.csrf_token(),
         me=auth.public_user(user),
         is_admin=permissions.is_admin(user),
+        menus=sorted(menus),
         # 왼쪽 레일용. rail_menu 는 이 화면에만 있는 아바타 메뉴를 그리라는 뜻이다.
         rail="chat",
         rail_menu=True,
@@ -493,6 +513,24 @@ def index():
 @app.get("/health")
 def health():
     return jsonify(status="ok")
+
+
+@app.get("/no-access")
+@auth.login_required
+def no_access():
+    """
+    메뉴를 하나도 못 받은 사람이 보는 화면.
+
+    빈 화면이나 403 대신 무엇을 하면 되는지 한 줄로 알려 주고, 로그아웃
+    단추를 반드시 둔다. 들어왔는데 나갈 길이 없는 화면을 만들면 안 된다.
+    """
+    user = auth.current_user()
+    db = get_db()
+    dest = permissions.landing_path(db, user)
+    if dest:                      # 그 사이에 권한을 받았으면 바로 보낸다
+        return redirect(dest)
+    return render_template("no_access.html", me=auth.public_user(user),
+                           is_admin=False, menus=[], rail="")
 
 
 # --- PWA : 서비스워커는 루트 스코프에서 제공해야 사이트 전체를 제어할 수 있다 ---
@@ -562,6 +600,7 @@ def change_my_password():
 # ---------------------------------------------------------------------------
 @app.get("/api/projects")
 @auth.login_required
+@auth.menu_required("chat")
 def list_projects():
     db = get_db()
     user = auth.current_user()
@@ -578,6 +617,7 @@ def list_projects():
 
 @app.post("/api/projects")
 @auth.login_required
+@auth.menu_required("chat")
 def create_project():
     user = auth.current_user()
     permissions.require_manage_project(user)
@@ -602,6 +642,7 @@ def create_project():
 
 @app.patch("/api/projects/<int:pid>")
 @auth.login_required
+@auth.menu_required("chat")
 def update_project(pid):
     user = auth.current_user()
     permissions.require_manage_project(user)
@@ -633,6 +674,7 @@ def update_project(pid):
 
 @app.delete("/api/projects/<int:pid>")
 @auth.login_required
+@auth.menu_required("chat")
 def delete_project(pid):
     user = auth.current_user()
     permissions.require_manage_project(user)
@@ -654,6 +696,7 @@ def delete_project(pid):
 # ---------------------------------------------------------------------------
 @app.get("/api/projects/<int:pid>/sessions")
 @auth.login_required
+@auth.menu_required("chat")
 def list_sessions(pid):
     """
     scope : all(기본) | mine | public
@@ -688,6 +731,7 @@ def list_sessions(pid):
 
 @app.post("/api/projects/<int:pid>/sessions")
 @auth.login_required
+@auth.menu_required("chat")
 def create_session(pid):
     db = get_db()
     user = auth.current_user()
@@ -712,6 +756,7 @@ def create_session(pid):
 
 @app.get("/api/sessions/<int:sid>")
 @auth.login_required
+@auth.menu_required("chat")
 def get_session(sid):
     db = get_db()
     user = auth.current_user()
@@ -722,6 +767,7 @@ def get_session(sid):
 
 @app.patch("/api/sessions/<int:sid>")
 @auth.login_required
+@auth.menu_required("chat")
 def update_session(sid):
     db = get_db()
     user = auth.current_user()
@@ -761,6 +807,7 @@ def update_session(sid):
 
 @app.delete("/api/sessions/<int:sid>")
 @auth.login_required
+@auth.menu_required("chat")
 def delete_session(sid):
     db = get_db()
     user = auth.current_user()
@@ -784,6 +831,7 @@ def delete_session(sid):
 # ---------------------------------------------------------------------------
 @app.get("/api/sessions/<int:sid>/messages")
 @auth.login_required
+@auth.menu_required("chat")
 def list_messages(sid):
     db = get_db()
     user = auth.current_user()
@@ -795,6 +843,7 @@ def list_messages(sid):
 
 @app.post("/api/sessions/<int:sid>/messages")
 @auth.login_required
+@auth.menu_required("chat")
 def post_message(sid):
     """
     multipart/form-data : message=텍스트, images=파일(복수)
@@ -901,6 +950,7 @@ def post_message(sid):
 # ---------------------------------------------------------------------------
 @app.get("/api/attachments/<int:aid>")
 @auth.login_required
+@auth.menu_required("chat")
 def get_attachment(aid):
     db = get_db()
     user = auth.current_user()
@@ -934,6 +984,35 @@ def get_attachment(aid):
 # ---------------------------------------------------------------------------
 # 기동 / 관리 명령
 # ---------------------------------------------------------------------------
+def _patch_scan_loop():
+    """
+    주기 스캔. 루트마다 주기가 따로 있고(patch_roots.scan_interval_s),
+    오래 안 돈 루트부터 돈다. 한 루트가 죽어도 나머지는 돈다.
+
+    요청 스레드가 아니라 전용 스레드라서 Flask 의 g 를 쓸 수 없다. 연결을
+    직접 열고 닫는다. gunicorn 워커가 1개이므로 이 스레드도 하나뿐이고,
+    patch_scan 의 락이 수동 검사와 겹치는 것을 막는다.
+    """
+    while True:
+        time.sleep(max(10, config.PATCH_SCAN_TICK_SECONDS))
+        try:
+            conn = connect()
+            try:
+                for root in patch_scan.due_roots(conn):
+                    patch_scan.scan(conn, root["id"], "periodic")
+            finally:
+                conn.close()
+        except Exception:                      # pragma: no cover
+            app.logger.exception("patch scan loop")
+
+
+def start_patch_scanner():
+    if not config.PATCH_SCAN_ENABLED:
+        return
+    t = threading.Thread(target=_patch_scan_loop, name="patch-scan", daemon=True)
+    t.start()
+
+
 def startup():
     """마이그레이션 -> 설정 초기값 -> bootstrap 토큰. 매 기동 시 안전하게 반복 가능."""
     info = migrate()
@@ -943,6 +1022,7 @@ def startup():
         token = auth.ensure_setup_token(conn)
     finally:
         conn.close()
+    start_patch_scanner()
     return info, token
 
 

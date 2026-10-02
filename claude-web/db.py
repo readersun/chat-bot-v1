@@ -43,9 +43,10 @@ import time
 
 from flask import g
 
+import patch_rules
 from config import BACKUP_DIR, DATABASE_PATH, UPLOAD_DIR
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -207,6 +208,168 @@ CREATE TABLE IF NOT EXISTS login_attempts (
     created_at TEXT NOT NULL
 );
 
+-- ---------------------------------------------------------------------------
+-- 메뉴 권한 (v6)
+--
+-- 행이 있으면 그 메뉴가 보인다. 관리자는 이 표와 무관하게 전부 가진다.
+-- 레일에서 안 그리는 것만으로는 권한이 아니다. 라우트마다 서버에서 막는다.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_menus (
+    user_id    INTEGER NOT NULL,
+    menu_key   TEXT NOT NULL CHECK (menu_key IN ('chat', 'notes', 'patch')),
+    granted_at TEXT NOT NULL,
+    granted_by INTEGER,
+    PRIMARY KEY (user_id, menu_key),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- ---------------------------------------------------------------------------
+-- 패치 저장소 (v6)
+--
+-- 파일시스템이 진짜고 이 표들은 색인이다. 통째로 지워도 스캔 한 번으로 전부
+-- 돌아와야 한다. 그래서 어느 표에도 "파일에 없는 정보"를 넣지 않는다.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS patch_version_rules (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    pattern    TEXT NOT NULL,
+    sort_kind  TEXT NOT NULL DEFAULT 'numeric'
+               CHECK (sort_kind IN ('numeric', 'lexical')),
+    sample     TEXT NOT NULL DEFAULT '',
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- 와칭 루트. 관리자가 손으로 등록하는 유일한 경로다. 여러 개 둘 수 있다.
+CREATE TABLE IF NOT EXISTS patch_roots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    label           TEXT NOT NULL DEFAULT '',
+    path            TEXT NOT NULL UNIQUE,
+    scan_enabled    INTEGER NOT NULL DEFAULT 1,
+    scan_interval_s INTEGER NOT NULL DEFAULT 600,
+    date_format     TEXT NOT NULL DEFAULT 'YYMMDD',
+    hash_enabled    INTEGER NOT NULL DEFAULT 0,
+    last_scanned_at TEXT,
+    last_error      TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+-- 사이트 = 루트 바로 아래 폴더. 스캔이 찾아 넣는다. 사람이 만들지 않는다.
+-- 루트가 다르면 같은 이름의 사이트가 있어도 된다. 그래서 UNIQUE 가 둘이다.
+CREATE TABLE IF NOT EXISTS patch_sites (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_id       INTEGER NOT NULL,
+    name          TEXT NOT NULL,
+    label         TEXT NOT NULL DEFAULT '',
+    date_format   TEXT NOT NULL DEFAULT 'YYMMDD',
+    is_visible    INTEGER NOT NULL DEFAULT 0,
+    discovered_at TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE (root_id, name),
+    FOREIGN KEY (root_id) REFERENCES patch_roots(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS patch_products (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id         INTEGER NOT NULL,
+    name            TEXT NOT NULL,
+    label           TEXT NOT NULL DEFAULT '',
+    version_rule_id INTEGER,
+    is_visible      INTEGER NOT NULL DEFAULT 0,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    discovered_at   TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE (site_id, name),
+    FOREIGN KEY (site_id) REFERENCES patch_sites(id) ON DELETE CASCADE,
+    FOREIGN KEY (version_rule_id) REFERENCES patch_version_rules(id) ON DELETE SET NULL
+);
+
+-- 모듈만은 손으로 등록한다. "매칭된 파일만 버전 관리" 라는 규칙이 여기 걸려 있다.
+-- name 은 파일 이름 앞부분과 글자 그대로 같아야 한다.
+CREATE TABLE IF NOT EXISTS patch_modules (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id      INTEGER NOT NULL,
+    name            TEXT NOT NULL,
+    label           TEXT NOT NULL DEFAULT '',
+    version_rule_id INTEGER,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    -- is_active  = 스캐너가 이 모듈로 파일을 매칭할지. (API 전용, 화면 없음)
+    -- is_visible = 사용자 패치 화면에 보일지. 숨겨도 매칭은 계속한다.
+    --   둘을 나눈 이유: 숨기려고 매칭을 끄면 새로 들어온 파일이 "매칭 안 된
+    --   파일" 로 쌓여서, 등록해 둔 모듈인데 등록하라는 목록에 뜬다.
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    is_visible      INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE (product_id, name),
+    FOREIGN KEY (product_id) REFERENCES patch_products(id) ON DELETE CASCADE,
+    FOREIGN KEY (version_rule_id) REFERENCES patch_version_rules(id) ON DELETE SET NULL
+);
+
+-- 스캔이 찾은 tar 한 건. module_id 가 NULL 이면 "매칭 안 된 파일" 이다.
+-- 지우지 않고 남겨 둬야 관리자가 새 모듈이 들어온 것을 알 수 있다.
+CREATE TABLE IF NOT EXISTS patch_files (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id      INTEGER NOT NULL,
+    module_id       INTEGER,
+    date_dir        TEXT NOT NULL,
+    date_at         TEXT,
+    filename        TEXT NOT NULL,
+    rel_path        TEXT NOT NULL,
+    version         TEXT NOT NULL DEFAULT '',
+    version_sort    TEXT NOT NULL DEFAULT '',
+    suffix          TEXT NOT NULL DEFAULT '',
+    size            INTEGER NOT NULL DEFAULT 0,
+    mtime_ns        INTEGER NOT NULL DEFAULT 0,
+    sha256          TEXT NOT NULL DEFAULT '',
+    content_changed INTEGER NOT NULL DEFAULT 0,
+    -- 관리자가 이 파일 한 건만 감춘 상태. 스캔은 이 칸을 건드리지 않는다.
+    -- (다시 스캔해도 숨김이 풀리면 안 된다)
+    is_visible      INTEGER NOT NULL DEFAULT 1,
+    is_missing      INTEGER NOT NULL DEFAULT 0,
+    first_seen_at   TEXT NOT NULL,
+    last_seen_at    TEXT NOT NULL,
+    UNIQUE (product_id, date_dir, filename),
+    FOREIGN KEY (product_id) REFERENCES patch_products(id) ON DELETE CASCADE,
+    FOREIGN KEY (module_id) REFERENCES patch_modules(id) ON DELETE SET NULL
+);
+
+-- 스캔 이력. 루트 하나가 한 번 도는 것이 한 줄이다.
+-- trigger 는 SQLite 예약어라 trigger_kind 로 둔다.
+CREATE TABLE IF NOT EXISTS patch_scans (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_id      INTEGER,
+    trigger_kind TEXT NOT NULL DEFAULT 'manual'
+                 CHECK (trigger_kind IN ('manual', 'periodic')),
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT,
+    added        INTEGER NOT NULL DEFAULT 0,
+    updated      INTEGER NOT NULL DEFAULT 0,
+    missing      INTEGER NOT NULL DEFAULT 0,
+    held         INTEGER NOT NULL DEFAULT 0,
+    unmatched    INTEGER NOT NULL DEFAULT 0,
+    off_rule     INTEGER NOT NULL DEFAULT 0,
+    new_sites    INTEGER NOT NULL DEFAULT 0,
+    new_products INTEGER NOT NULL DEFAULT 0,
+    error        TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (root_id) REFERENCES patch_roots(id) ON DELETE SET NULL
+);
+
+-- 사이트 범위. users.patch_all_sites = 0 일 때만 읽는다.
+CREATE TABLE IF NOT EXISTS user_patch_sites (
+    user_id    INTEGER NOT NULL,
+    site_id    INTEGER NOT NULL,
+    granted_at TEXT NOT NULL,
+    granted_by INTEGER,
+    PRIMARY KEY (user_id, site_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (site_id) REFERENCES patch_sites(id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_project   ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_owner     ON sessions(owner_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session   ON messages(session_id, id);
@@ -219,6 +382,14 @@ CREATE INDEX IF NOT EXISTS idx_note_cmt_note      ON note_comments(note_id, id);
 CREATE INDEX IF NOT EXISTS idx_note_cmt_parent    ON note_comments(parent_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created      ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_login_attempts     ON login_attempts(created_at);
+CREATE INDEX IF NOT EXISTS idx_user_menus_user    ON user_menus(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_patch_sites   ON user_patch_sites(user_id);
+CREATE INDEX IF NOT EXISTS idx_patch_sites_root   ON patch_sites(root_id);
+CREATE INDEX IF NOT EXISTS idx_patch_products_site ON patch_products(site_id);
+CREATE INDEX IF NOT EXISTS idx_patch_modules_prod ON patch_modules(product_id);
+CREATE INDEX IF NOT EXISTS idx_patch_files_product ON patch_files(product_id, date_dir);
+CREATE INDEX IF NOT EXISTS idx_patch_files_module ON patch_files(module_id, version_sort);
+CREATE INDEX IF NOT EXISTS idx_patch_scans_started ON patch_scans(started_at);
 """
 
 
@@ -368,9 +539,19 @@ def pending_migrations(conn):
     """적용해야 할 변경 목록을 사람이 읽을 수 있는 문자열로 돌려준다."""
     todo = []
     for t in ("users", "settings", "session_members", "audit_logs", "login_attempts",
-              "notes", "note_attachments", "note_comments"):
+              "notes", "note_attachments", "note_comments",
+              # v6 : 메뉴 권한과 패치 저장소
+              "user_menus", "user_patch_sites", "patch_version_rules", "patch_roots",
+              "patch_sites", "patch_products", "patch_modules", "patch_files",
+              "patch_scans"):
         if not table_exists(conn, t):
             todo.append("CREATE TABLE %s" % t)
+    if table_exists(conn, "users") and "patch_all_sites" not in column_names(conn, "users"):
+        todo.append("users.patch_all_sites 추가")
+    # v7 : 모듈/파일 단위 공개 여부
+    for t, c in (("patch_modules", "is_visible"), ("patch_files", "is_visible")):
+        if table_exists(conn, t) and c not in column_names(conn, t):
+            todo.append("%s.%s 추가" % (t, c))
     if table_exists(conn, "sessions"):
         cols = column_names(conn, "sessions")
         if "owner_id" not in cols:
@@ -405,6 +586,12 @@ def migrate(verbose=True):
         fresh = not table_exists(conn, "sessions")
         todo = pending_migrations(conn)
         needs_work = bool(todo)
+
+        # v6 : 아래 두 가지는 "표를 지금 처음 만드는 경우"에만 채워야 한다.
+        # 매 기동마다 다시 넣으면 관리자가 떼어 낸 메뉴 권한이 되살아나고,
+        # 지운 내장 버전 규칙이 다시 생긴다. 그래서 creates 전에 미리 본다.
+        had_user_menus = table_exists(conn, "user_menus")
+        had_version_rules = table_exists(conn, "patch_version_rules")
 
         # 기존 데이터가 있는 DB 를 고치는 경우에만 백업한다.
         if needs_work and not fresh and has_data(conn):
@@ -462,6 +649,47 @@ def migrate(verbose=True):
                 steps.append(
                     "attachments.file_path %d건을 상대경로로 변환 (기준: %s)"
                     % (len(legacy), UPLOAD_DIR))
+
+            # --- v6 : 메뉴 권한과 패치 저장소 -----------------------------
+            now = ts()
+
+            # 1 = 모든 사이트, 0 = user_patch_sites 에 고른 것만.
+            # 기본을 1 로 둬야 지금 동작이 그대로 유지된다.
+            if "patch_all_sites" not in column_names(conn, "users"):
+                conn.execute("ALTER TABLE users ADD COLUMN patch_all_sites "
+                             "INTEGER NOT NULL DEFAULT 1")
+                steps.append("users.patch_all_sites 추가 (기본 1 = 모든 사이트)")
+
+            # --- v7 : 모듈/파일 단위 공개 여부 --------------------------
+            # 기본 1 이어야 지금 보이는 것이 그대로 보인다. 0 으로 넣으면
+            # 마이그레이션 직후 패치 목록이 통째로 비어 버린다.
+            for t in ("patch_modules", "patch_files"):
+                if "is_visible" not in column_names(conn, t):
+                    conn.execute("ALTER TABLE %s ADD COLUMN is_visible "
+                                 "INTEGER NOT NULL DEFAULT 1" % t)
+                    steps.append("%s.is_visible 추가 (기본 1 = 보임)" % t)
+
+            # 내장 버전 규칙. 표를 처음 만들 때만 넣는다.
+            if not had_version_rules:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO patch_version_rules"
+                    " (name, pattern, sort_kind, sample, is_builtin, created_at, updated_at)"
+                    " VALUES (?,?,?,?,1,?,?)",
+                    [(r["name"], r["pattern"], r["sort_kind"], r["sample"], now, now)
+                     for r in patch_rules.BUILTIN_VERSION_RULES])
+                steps.append("내장 버전 규칙 %d건 등록"
+                             % len(patch_rules.BUILTIN_VERSION_RULES))
+
+            # 이 두 줄이 빠지면 마이그레이션 직후 전원이 아무 메뉴도 못 본다.
+            # 지금 쓰고 있는 것(채팅/메모)을 그대로 넣어 준다. 패치는 아무에게도
+            # 주지 않는다. 관리자가 직접 준다.
+            if not had_user_menus:
+                n = 0
+                for key in ("chat", "notes"):
+                    n += conn.execute(
+                        "INSERT OR IGNORE INTO user_menus (user_id, menu_key, granted_at)"
+                        " SELECT id, ?, ? FROM users", (key, now)).rowcount
+                steps.append("기존 사용자에게 채팅/메모 메뉴 %d건 부여 (패치는 수동)" % n)
 
             for stmt in indexes:
                 conn.execute(stmt)
