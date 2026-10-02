@@ -51,10 +51,26 @@ def safe_segment(name):
 # 날짜 폴더 형식
 # ---------------------------------------------------------------------------
 # 관리자 화면의 선택 목록. 여기에 없는 꼴은 직접 적는다.
-DATE_PRESETS = ("YYMMDD", "YYYYMMDD", "YYYY-MM-DD", "YY-MM-DD")
+# 날짜 폴더 형식
+# ----------------------------------------------------------------------------
+# YYYY YY MM DD 는 숫자 자리, * 는 아무 글자나(없어도 된다), 그 밖의 글자는
+# 글자 그대로다. 그래서 이런 폴더 이름을 다 받을 수 있다.
+#
+#     260923                YYMMDD
+#     260923_prod           YYMMDD_prod    (글자를 그대로 적는다)
+#     260923 과 260923_prod YYMMDD*        (섞여 있으면 * 로 받는다)
+#     rel_20261005          rel_YYYYMMDD
+#
+# 꼬리표가 폴더마다 다르면(_prod, _hotfix, -rc1) * 쪽이 맞는다. 형식은 사이트
+# 하나에 하나만 고를 수 있어서, 글자를 그대로 적으면 꼬리표 없는 폴더가 빠진다.
+DATE_PRESETS = ("YYMMDD", "YYMMDD*", "YYYYMMDD", "YYYYMMDD*",
+                "YYYY-MM-DD", "YYYY-MM-DD*", "YY-MM-DD")
 DEFAULT_DATE_FORMAT = "YYMMDD"
 
 MAX_DATE_FORMAT_LEN = 64
+# * 를 몇 개까지 허용할까. 여러 개 쓸 이유가 없고, .* 가 늘어나면 폴더 이름
+# 하나를 맞추는 데 드는 되돌림이 커진다.
+MAX_DATE_WILDCARDS = 3
 
 # 긴 토큰을 먼저 본다. YYYY 를 YY 두 개로 읽으면 안 된다.
 _DATE_TOKENS = (
@@ -62,6 +78,9 @@ _DATE_TOKENS = (
     ("YY", r"(?P<Y2>\d{2})"),
     ("MM", r"(?P<M>\d{2})"),
     ("DD", r"(?P<D>\d{2})"),
+    # 아무 글자나. 없어도 맞는다. 숫자를 뺀 글자로 좁히고 싶었지만 _v2 처럼
+    # 숫자가 섞인 꼬리표도 있어서 열어 둔다.
+    ("*", r".*"),
 )
 
 
@@ -85,11 +104,20 @@ def validate_date_format(fmt):
         return False, "월 자리가 없습니다. MM 을 넣어 주세요."
     if "DD" not in fmt:
         return False, "일 자리가 없습니다. DD 를 넣어 주세요."
+    if fmt.count("*") > MAX_DATE_WILDCARDS:
+        return False, "* 는 %d개까지만 쓸 수 있습니다." % MAX_DATE_WILDCARDS
     return True, ""
 
 
 def compile_date_format(fmt):
-    """형식 문자열을 정규식으로 바꾼다. 토큰이 아닌 글자는 그대로 있어야 한다."""
+    """
+    형식 문자열을 정규식으로 바꾼다. 토큰이 아닌 글자는 그대로 있어야 한다.
+
+    * 가 날짜 앞에 오면 앞쪽이 욕심껏 먹는다. 즉 날짜로 읽을 수 있는 자리가
+    여럿일 때 **뒤쪽**을 날짜로 본다. (20260923 을 *YYMMDD 로 읽으면 20 을
+    버리고 260923 을 날짜로 본다) 꼬리표는 뒤에 붙는 것이 보통이므로 * 는
+    끝에 쓰는 쪽을 권한다.
+    """
     ok, _ = validate_date_format(fmt)
     if not ok:
         return None

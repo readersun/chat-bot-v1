@@ -237,8 +237,10 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
       }).concat([el("option", { value: "__custom__", text: "직접 입력",
                                 selected: custom ? "selected" : null })]));
     var box = el("input", { type: "text", value: custom ? value : "",
-                            placeholder: "YYYY.MM.DD", "aria-label": "날짜 형식 직접 입력",
-                            style: "width:130px" });
+                            placeholder: "YYMMDD_prod", "aria-label": "날짜 형식 직접 입력",
+                            title: "YYYY YY MM DD 는 숫자 자리, * 는 아무 글자나, "
+                              + "그 밖의 글자는 글자 그대로입니다.",
+                            style: "width:150px" });
     box.hidden = !custom;
 
     function fire() {
@@ -432,7 +434,23 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
           el("div", { class: "empty", text: "아직 발견된 사이트가 없습니다. 스캔 묶음에서 검사를 돌려 보세요." })])])])
       ])]),
       el("p", { class: "hint",
-        text: "날짜 형식은 루트의 기본값을 물려받습니다. 형식과 안 맞는 폴더도 버리지 않고 목록 맨 뒤에 남습니다." })
+        text: "날짜 형식은 루트의 기본값을 물려받습니다. 형식과 안 맞는 폴더도 버리지 않고 목록 맨 뒤에 남습니다." }),
+      el("p", { class: "hint" }, [
+        document.createTextNode("형식 쓰는 법 — "),
+        el("code", { class: "mono", text: "YYYY YY MM DD" }),
+        document.createTextNode(" 는 숫자 자리, "),
+        el("code", { class: "mono", text: "*" }),
+        document.createTextNode(" 는 아무 글자나(없어도 됩니다), 그 밖의 글자는 글자 그대로입니다. "),
+        el("code", { class: "mono", text: "YYMMDD_prod" }),
+        document.createTextNode(" 처럼 꼬리표를 그대로 적어도 되고, 폴더마다 꼬리표가 다르면 "),
+        el("code", { class: "mono", text: "YYMMDD*" }),
+        document.createTextNode(" 로 "),
+        el("code", { class: "mono", text: "260923" }),
+        document.createTextNode(" 와 "),
+        el("code", { class: "mono", text: "260923_prod" }),
+        document.createTextNode(" 를 한꺼번에 받습니다. 고르기 전에 모듈 묶음의 '파일명 / 날짜 테스트' 에서 "
+          + "실제 폴더 이름을 넣어 확인해 보세요.")
+      ])
     ]);
   }
 
@@ -632,9 +650,12 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
   function testPanel() {
     var fileIn = el("input", { type: "text", value: "stt_unified_1.0.0.tar",
                                "aria-label": "파일 이름", style: "width:100%" });
-    var dateIn = el("input", { type: "text", value: "260923",
+    /* 기본값을 꼬리표가 붙은 쪽으로 둔다. 꼬리표 붙은 폴더가 있다는 것을
+       모르고 YYMMDD 로 두면, 그 폴더는 날짜 없이 목록 맨 뒤에 쌓인다. */
+    var dateIn = el("input", { type: "text", value: "260923_prod",
                                "aria-label": "날짜 폴더 이름", style: "width:100%" });
-    var fmtIn = el("input", { type: "text", value: "YYMMDD",
+    var fmtIn = el("input", { type: "text", value: "YYMMDD*",
+                              placeholder: "YYMMDD*",
                               "aria-label": "날짜 형식", style: "width:100%" });
     var out = el("div");
 
