@@ -374,6 +374,60 @@ class TestMigration(unittest.TestCase):
         finally:
             c.close()
 
+    def test_repeated_failed_boots_do_not_push_out_old_backups(self):
+        """
+        기동이 반복해서 실패해도 **사고 전 백업이 남아 있어야 한다.**
+
+        운영 서버에서 마이그레이션이 깨져 컨테이너가 재시작 루프에 빠졌고,
+        1분에 한 번씩 백업이 생겼다. prune_backups(keep=10) 는 오래된 것부터
+        지우므로, 그대로 두면 열 번 만에 사고 전 백업이 전부 밀려 나간다.
+        되돌릴 것이 필요한 바로 그 순간에 되돌릴 것이 없어진다.
+
+        실패한 마이그레이션은 롤백되므로 DB 는 그대로다. 그러니 두 번째부터의
+        백업은 앞의 것과 내용이 같고, 같으면 새로 만들지 않아야 한다.
+        """
+        saved_dir = db_module.BACKUP_DIR
+        db_module.BACKUP_DIR = os.path.join(self.dir, "backups")
+        try:
+            c = db_module.connect(self.path)
+            try:
+                c.executescript(V1_SCHEMA)
+                c.execute("INSERT INTO projects (name,description,created_at,"
+                          "updated_at) VALUES ('옛','',?,?)", ("t", "t"))
+                c.commit()
+            finally:
+                c.close()
+
+            # 사고 전에 손으로 받아 둔 백업 한 장
+            keepsake = db_module.backup_database("manual")
+            self.assertIsNotNone(keepsake)
+
+            # 기동이 열두 번 실패한다 = DB 는 그대로인 채 백업만 열두 번 시도
+            paths = [db_module.backup_database_once("migrate") for _ in range(12)]
+            db_module.prune_backups()
+
+            names = sorted(os.listdir(db_module.BACKUP_DIR))
+            self.assertTrue(os.path.exists(keepsake),
+                            "사고 전 백업이 밀려 나갔다: %s" % names)
+            migrates = [n for n in names if "-migrate-" in n]
+            self.assertEqual(len(migrates), 1,
+                             "같은 내용인데 여러 장 쌓였다: %s" % migrates)
+            self.assertEqual(len(set(paths)), 1,
+                             "같은 내용이면 같은 경로를 돌려줘야 한다")
+
+            # DB 가 실제로 바뀌면 그때는 새로 남긴다
+            c = db_module.connect(self.path)
+            try:
+                c.execute("INSERT INTO projects (name,description,created_at,"
+                          "updated_at) VALUES ('새','',?,?)", ("t", "t"))
+                c.commit()
+            finally:
+                c.close()
+            after = db_module.backup_database_once("migrate")
+            self.assertNotEqual(after, paths[0], "바뀌었는데 새로 안 남겼다")
+        finally:
+            db_module.BACKUP_DIR = saved_dir
+
     def test_fresh(self):
         db_module.migrate(verbose=False)
         c = db_module.connect(self.path)

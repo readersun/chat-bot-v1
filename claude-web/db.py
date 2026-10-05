@@ -51,6 +51,7 @@ sqlite 는 제약만 바꾸는 ALTER 가 없다. 그래서 그 표만 "이름 �
 원래 표가 그대로 남는다. 옮길 때 지금 쓰는 메뉴 키만 남기므로 권한이 늘지 않는다.
 """
 
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -701,10 +702,16 @@ def backup_database(label="manual"):
     if not os.path.exists(DATABASE_PATH):
         return None
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    dest = os.path.join(
+    # 이름은 초 단위다. 같은 초에 두 번 부르면 앞의 백업을 **덮어쓴다.**
+    # 백업을 덮어쓰는 것은 백업이 없는 것보다 나쁘다. 있다고 믿게 만든다.
+    base = os.path.join(
         BACKUP_DIR,
         "chat.db.backup-%s-%s" % (label, time.strftime("%Y%m%d-%H%M%S")),
     )
+    dest, n = base, 1
+    while os.path.exists(dest):
+        n += 1
+        dest = "%s-%d" % (base, n)
     src = sqlite3.connect(DATABASE_PATH, timeout=30.0)
     try:
         dst = sqlite3.connect(dest)
@@ -720,6 +727,52 @@ def backup_database(label="manual"):
         except OSError:
             pass
     return dest
+
+
+def _newest_backup(label):
+    """그 라벨로 만들어 둔 가장 최근 백업 경로. 없으면 None."""
+    head = "chat.db.backup-%s-" % label
+    try:
+        names = sorted(n for n in os.listdir(BACKUP_DIR) if n.startswith(head))
+    except OSError:
+        return None
+    return os.path.join(BACKUP_DIR, names[-1]) if names else None
+
+
+def backup_database_once(label="migrate"):
+    """
+    백업을 만들되, **앞의 것과 내용이 같으면 새로 만들지 않는다.**
+
+    기동이 반복해서 실패하면 재시작 때마다 백업이 생긴다. 실패한 마이그레이션은
+    롤백되므로 DB 는 그대로이고, 따라서 그 백업들은 전부 같은 내용이다. 그대로
+    두면 prune_backups 가 오래된 것부터 지워서 **사고 전 백업이 밀려 나간다.**
+    되돌릴 것이 필요한 순간에 되돌릴 것이 없어진다.
+
+    반환: 쓸 수 있는 백업 경로 (새로 만든 것이거나, 같은 내용의 앞의 것)
+    """
+    prev = _newest_backup(label)
+    made = backup_database(label)
+    if made is None or prev is None or prev == made:
+        return made
+    try:
+        if os.path.getsize(prev) == os.path.getsize(made) and \
+                _file_digest(prev) == _file_digest(made):
+            os.remove(made)
+            return prev
+    except OSError:
+        pass
+    return made
+
+
+def _file_digest(path, chunk=1 << 20):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(chunk)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
 
 
 def prune_backups(keep=10):
@@ -883,7 +936,7 @@ def migrate(verbose=True):
         # 기존 데이터가 있는 DB 를 고치는 경우에만 백업한다.
         if needs_work and not fresh and has_data(conn):
             conn.close()
-            backup_path = backup_database("migrate")
+            backup_path = backup_database_once("migrate")
             prune_backups()
             conn = connect()
             steps.append("백업: %s" % backup_path)
