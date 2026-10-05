@@ -220,4 +220,49 @@ SETTINGS_BOOTSTRAP = {
     "claude_api_key": os.getenv("CLAUDE_API_KEY", ""),
     "claude_api_model": os.getenv("CLAUDE_API_MODEL", "claude-sonnet-5"),
     "claude_api_base_url": os.getenv("CLAUDE_API_BASE_URL", "https://api.anthropic.com"),
+
+    # --- SSH 중계 -------------------------------------------------------
+    # 기본값은 전부 "가장 조용한 쪽" 이다. 정책은 조회만, 승인 없이 나가는
+    # 변경 명령은 없고, 터미널은 한 사람에 2개까지다.
+    "relay_policy": os.getenv("RELAY_POLICY", "read"),
+    "relay_poll_seconds": str(env_int("RELAY_POLL_SECONDS", 25)),
+    "relay_run_timeout": str(env_int("RELAY_RUN_TIMEOUT", 30)),
+    "relay_approval_seconds": str(env_int("RELAY_APPROVAL_SECONDS", 120)),
+    "relay_term_max_per_user": str(env_int("RELAY_TERM_MAX_PER_USER", 2)),
+    "relay_term_idle_seconds": str(env_int("RELAY_TERM_IDLE_SECONDS", 180)),
+    "relay_chat_max_commands": str(env_int("RELAY_CHAT_MAX_COMMANDS", 3)),
+    "relay_queue_keep_days": str(env_int("RELAY_QUEUE_KEEP_DAYS", 90)),
 }
+
+# ---------------------------------------------------------------------------
+# SSH 중계 (고정값. 운영 중 바뀌지 않는다)
+# ---------------------------------------------------------------------------
+# 터미널 화면 내용은 DB 에 넣지 않고 이 크기만큼만 메모리에 둔다. 새로고침하면
+# 여기 남아 있는 만큼 다시 그린다. 워커가 1개라서 스레드끼리 같은 버퍼를 본다.
+RELAY_TERM_BUFFER_BYTES = env_int("RELAY_TERM_BUFFER_BYTES", 256 * 1024)
+
+# 한 번에 보낼 수 있는 붙여넣기 크기. 사람이 치는 속도를 넘는 양이 들어오면
+# 실수(잘못된 창에 붙여넣기)일 가능성이 높다.
+RELAY_TERM_MAX_INPUT_BYTES = env_int("RELAY_TERM_MAX_INPUT_BYTES", 4096)
+
+# 등록 코드. 6자리 숫자이고 한 번 쓰면 죽는다. 짧은 대신 수명이 짧고
+# 실패 횟수를 센다. (relay.py 의 _enroll_blocked)
+RELAY_ENROLL_TTL_SECONDS = env_int("RELAY_ENROLL_TTL_SECONDS", 600)
+RELAY_ENROLL_MAX_FAILURES = env_int("RELAY_ENROLL_MAX_FAILURES", 10)
+
+# 질문 한 번에 쓸 수 있는 전체 시간.
+#
+# 서버가 붙은 대화는 "질문 -> Claude -> 명령 실행 -> Claude" 로 Claude 를 두 번
+# 부른다. 각각 claude_timeout(기본 180초)까지 걸릴 수 있어서 그냥 두면 한 요청이
+# gunicorn timeout(300초)을 넘겨 워커가 죽는다. 그래서 다음 왕복을 시작하기
+# 전에 "남은 시간 안에 끝낼 수 있는가" 를 보고, 안 되면 거기서 멈춘다.
+#   240 < gunicorn 300 < nginx 360
+RELAY_CHAT_BUDGET = env_int("RELAY_CHAT_BUDGET", 240)
+
+# 중계 프로그램(relay.exe)을 두는 곳. 관리자가 한 번 올리면 사용자가 받아 간다.
+# DB 와 같은 데이터 루트 아래라서 Docker 배포의 볼륨에 이미 들어간다.
+RELAY_DIR = os.path.abspath(
+    os.getenv("RELAY_DIR") or os.path.join(os.path.dirname(DATABASE_PATH), "relay"))
+
+# 올릴 수 있는 최대 크기. PyInstaller 한 파일은 보통 8~15MB 다.
+RELAY_PROGRAM_MAX_MB = env_int("RELAY_PROGRAM_MAX_MB", 64)

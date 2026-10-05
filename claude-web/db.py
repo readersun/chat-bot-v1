@@ -33,6 +33,22 @@ v3 -> v4 (메모 기능 추가)
 -------------------------
 notes / note_attachments 테이블을 **추가만** 한다. 기존 테이블의 컬럼이나 데이터는
 전혀 건드리지 않으므로 채팅 기능에 영향이 없고, 실패해도 롤백되어 원래대로 남는다.
+
+v8 -> v9 (중계를 사람마다)
+-------------------------
+relay_agents.owner_id 와 relay_jobs.owner_id 를 더한다. 사람마다 자기 VDI 에
+중계를 깔기 때문에, 일이 **그 사람의 중계로만** 나가야 한다. 컬럼 두 개를
+더하는 것뿐이고 기존 데이터는 건드리지 않는다.
+
+v7 -> v8 (SSH 중계 추가)
+------------------------
+ssh_* / relay_* / term_* 표를 **추가만** 하고, 기존 표에는 컬럼 세 개를 더한다.
+(sessions.server_id, users.ssh_all_servers, users.ssh_level)
+
+하나 예외가 있다. user_menus.menu_key 의 CHECK 제약에 'servers' 를 넣어야 하는데
+sqlite 는 제약만 바꾸는 ALTER 가 없다. 그래서 그 표만 "이름 바꾸기 → 새로 만들기
+→ 옮겨 담기 → 버리기" 로 다시 만든다. 전부 같은 트랜잭션 안이라 중간에 실패하면
+원래 표가 그대로 남는다. 옮길 때 지금 쓰는 메뉴 키만 남기므로 권한이 늘지 않는다.
 """
 
 import os
@@ -46,7 +62,7 @@ from flask import g
 import patch_rules
 from config import BACKUP_DIR, DATABASE_PATH, UPLOAD_DIR
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -216,7 +232,7 @@ CREATE TABLE IF NOT EXISTS login_attempts (
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS user_menus (
     user_id    INTEGER NOT NULL,
-    menu_key   TEXT NOT NULL CHECK (menu_key IN ('chat', 'notes', 'patch')),
+    menu_key   TEXT NOT NULL CHECK (menu_key IN ('chat', 'notes', 'patch', 'servers')),
     granted_at TEXT NOT NULL,
     granted_by INTEGER,
     PRIMARY KEY (user_id, menu_key),
@@ -370,6 +386,183 @@ CREATE TABLE IF NOT EXISTS user_patch_sites (
     FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
+-- ---------------------------------------------------------------------------
+-- SSH 중계 (v8)
+--
+-- 챗봇 서버는 사내망 리눅스 서버에 직접 붙지 못한다. VDI 에 올려 둔 중계
+-- 프로그램이 이쪽으로 들어와서(한 방향) 할 일을 받아 가고 결과를 올린다.
+-- 그래서 이 표들은 "중계가 받아 갈 일"과 "그 결과"를 담는다.
+--
+-- 비밀은 두 군데에만 있다.
+--   ssh_servers.secret_enc  : 비밀번호. settings_store 와 같은 Fernet 파생키.
+--   relay_agents.key_hash   : 중계 토큰의 sha256. 원문은 등록 때 한 번만 준다.
+-- 기록용 표(ssh_commands, term_inputs)에는 어떤 비밀도 넣지 않는다.
+--
+-- 지우는 연산을 두지 않는다. 기록을 손댈 수 있으면 기록이 아니다.
+-- (relay_jobs 는 전송 큐라서 끝난 행만 보관 기간 뒤에 정리한다)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ssh_servers (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL UNIQUE,
+    host           TEXT NOT NULL,
+    port           INTEGER NOT NULL DEFAULT 22,
+    username       TEXT NOT NULL,
+    auth_kind      TEXT NOT NULL DEFAULT 'key' CHECK (auth_kind IN ('key', 'password')),
+    key_name       TEXT NOT NULL DEFAULT '',
+    secret_enc     TEXT NOT NULL DEFAULT '',
+    description    TEXT NOT NULL DEFAULT '',
+    is_enabled     INTEGER NOT NULL DEFAULT 1,
+    last_check_at  TEXT,
+    last_check_ok  INTEGER,
+    last_check_msg TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    created_by     INTEGER,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 사용 허용 범위. users.ssh_all_servers = 0 일 때만 본다.
+-- (패치의 user_patch_sites 와 같은 모양이다)
+CREATE TABLE IF NOT EXISTS ssh_grants (
+    user_id    INTEGER NOT NULL,
+    server_id  INTEGER NOT NULL,
+    granted_at TEXT NOT NULL,
+    granted_by INTEGER,
+    PRIMARY KEY (user_id, server_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 중계 한 대 = 한 행. 토큰 원문은 저장하지 않는다.
+--
+-- owner_id 가 핵심이다. 사람마다 자기 VDI 에 중계를 깔고 **자기 키로** 서버에
+-- 붙는다. 그래서 일은 그 사람의 중계로만 나가야 한다. 아무 중계나 남의 일을
+-- 가져가면 "누구 권한으로 돈 명령인지" 가 흐려진다.
+--
+-- 한 사람에 한 대다. 다시 등록하면 그 사람의 예전 중계만 끊는다.
+-- (남의 중계는 건드리지 않는다)
+CREATE TABLE IF NOT EXISTS relay_agents (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    key_hash      TEXT NOT NULL UNIQUE,
+    owner_id      INTEGER,
+    name          TEXT NOT NULL DEFAULT '',
+    version       TEXT NOT NULL DEFAULT '',
+    os_info       TEXT NOT NULL DEFAULT '',
+    ip            TEXT NOT NULL DEFAULT '',
+    scheme        TEXT NOT NULL DEFAULT '',
+    registered_at TEXT NOT NULL,
+    last_seen_at  TEXT,
+    revoked_at    TEXT,
+    created_by    INTEGER,
+    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 등록 코드. 한 번 쓰면 죽는다(used_at). 원문 대신 해시만 둔다.
+CREATE TABLE IF NOT EXISTS relay_enroll_codes (
+    code_hash  TEXT PRIMARY KEY,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by INTEGER,
+    used_at    TEXT,
+    agent_id   INTEGER,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (agent_id) REFERENCES relay_agents(id) ON DELETE SET NULL
+);
+
+-- 중계가 받아 갈 일. payload 에 비밀을 넣지 않는다. 접속 정보는 중계가
+-- 일을 받아 가는 그 응답에만 실려 나가고 어디에도 적히지 않는다.
+CREATE TABLE IF NOT EXISTS relay_jobs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL
+                 CHECK (kind IN ('test', 'run', 'term_open', 'term_input', 'term_close')),
+    -- 이 일을 가져갈 수 있는 사람. 그 사람의 중계만 가져간다.
+    -- (relay_store.take_jobs 가 agent 의 owner_id 와 맞춰 본다)
+    owner_id     INTEGER,
+    server_id    INTEGER,
+    term_id      TEXT NOT NULL DEFAULT '',
+    payload      TEXT NOT NULL DEFAULT '',
+    state        TEXT NOT NULL DEFAULT 'queued'
+                 CHECK (state IN ('queued', 'taken', 'done', 'failed', 'canceled')),
+    agent_id     INTEGER,
+    requested_by INTEGER,
+    created_at   TEXT NOT NULL,
+    taken_at     TEXT,
+    done_at      TEXT,
+    ok           INTEGER,
+    result       TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_id) REFERENCES relay_agents(id) ON DELETE SET NULL,
+    FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 웹 터미널 한 번 = 한 행. 화면에 흐른 내용은 메모리에만 두고 DB 에 넣지
+-- 않는다. 남기는 것은 "누가 언제 어느 서버에 붙어 무엇을 쳤는지" 다.
+CREATE TABLE IF NOT EXISTS term_sessions (
+    id           TEXT PRIMARY KEY,
+    -- 서버를 목록에서 빼도 이 줄은 남는다. 누가 언제 어디에 붙어 무엇을
+    -- 쳤는지는 그 서버가 사라진 뒤에도 남아야 한다. 그래서 NOT NULL 이
+    -- 아니고 ON DELETE SET NULL 이다. (기록 화면은 '삭제된 서버' 로 보여 준다)
+    server_id    INTEGER,
+    user_id      INTEGER,
+    state        TEXT NOT NULL DEFAULT 'opening'
+                 CHECK (state IN ('opening', 'open', 'closed', 'failed')),
+    opened_at    TEXT NOT NULL,
+    closed_at    TEXT,
+    last_io_at   TEXT,
+    close_reason TEXT NOT NULL DEFAULT '',
+    lines_in     INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE SET NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 사람이 직접 친 줄. 등급을 매기지 않는다(사람의 계정 권한 그대로다).
+-- 비밀번호를 묻는 프롬프트 뒤에 온 줄은 내용을 적지 않고 가린다.
+CREATE TABLE IF NOT EXISTS term_inputs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    term_id    TEXT NOT NULL,
+    line       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (term_id) REFERENCES term_sessions(id) ON DELETE CASCADE
+);
+
+-- 챗봇이 스스로 고른 명령. 등급과 승인은 여기에만 걸린다.
+CREATE TABLE IF NOT EXISTS ssh_commands (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id   INTEGER,
+    session_id  INTEGER,
+    message_id  INTEGER,
+    user_id     INTEGER,
+    source      TEXT NOT NULL DEFAULT 'chat' CHECK (source IN ('chat', 'test')),
+    command     TEXT NOT NULL,
+    level       TEXT NOT NULL DEFAULT 'read' CHECK (level IN ('read', 'write', 'blocked')),
+    state       TEXT NOT NULL DEFAULT 'pending'
+                CHECK (state IN ('pending', 'running', 'done', 'failed',
+                                 'rejected', 'expired', 'blocked', 'denied')),
+    reason      TEXT NOT NULL DEFAULT '',
+    approved_by INTEGER,
+    approved_at TEXT,
+    created_at  TEXT NOT NULL,
+    finished_at TEXT,
+    exit_code   INTEGER,
+    duration_ms INTEGER,
+    -- 결과의 "내용" 은 여기 넣지 않는다. 줄 수와 바이트 수 같은 요약만 넣는다.
+    -- 명령 결과는 그 대화에만 남는다(messages). 기록은 관리자가 보는 자리이고,
+    -- private 대화의 내용은 관리자도 볼 수 없어야 한다. 그 원칙이 여기서
+    -- 뚫리면 "나만 보기" 가 거짓이 된다.
+    result_note TEXT NOT NULL DEFAULT '',
+    job_id      INTEGER,
+    -- 전부 SET NULL 이다. 대화를 지운 사람이 그 대화에서 회사 서버에 나간
+    -- 명령의 기록까지 지울 수 있으면 안 된다. 어느 대화였는지는 사라지지만
+    -- 누가 언제 어느 서버에 무엇을 보냈는지는 남는다.
+    FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE SET NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL,
+    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_project   ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_owner     ON sessions(owner_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session   ON messages(session_id, id);
@@ -390,6 +583,16 @@ CREATE INDEX IF NOT EXISTS idx_patch_modules_prod ON patch_modules(product_id);
 CREATE INDEX IF NOT EXISTS idx_patch_files_product ON patch_files(product_id, date_dir);
 CREATE INDEX IF NOT EXISTS idx_patch_files_module ON patch_files(module_id, version_sort);
 CREATE INDEX IF NOT EXISTS idx_patch_scans_started ON patch_scans(started_at);
+CREATE INDEX IF NOT EXISTS idx_ssh_grants_user    ON ssh_grants(user_id);
+CREATE INDEX IF NOT EXISTS idx_relay_jobs_queue   ON relay_jobs(state, owner_id, id);
+CREATE INDEX IF NOT EXISTS idx_relay_agents_owner ON relay_agents(owner_id, revoked_at);
+CREATE INDEX IF NOT EXISTS idx_relay_jobs_term    ON relay_jobs(term_id, id);
+CREATE INDEX IF NOT EXISTS idx_term_sessions_user ON term_sessions(user_id, state);
+CREATE INDEX IF NOT EXISTS idx_term_inputs_term   ON term_inputs(term_id, id);
+CREATE INDEX IF NOT EXISTS idx_ssh_cmd_created    ON ssh_commands(created_at);
+CREATE INDEX IF NOT EXISTS idx_ssh_cmd_message    ON ssh_commands(message_id);
+CREATE INDEX IF NOT EXISTS idx_ssh_cmd_session    ON ssh_commands(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_sessions_server    ON sessions(server_id);
 """
 
 
@@ -535,6 +738,19 @@ def prune_backups(keep=10):
 # ---------------------------------------------------------------------------
 # 마이그레이션
 # ---------------------------------------------------------------------------
+def menu_check_outdated(conn):
+    """user_menus 의 CHECK 제약이 'servers' 를 모르는 상태인지.
+
+    sqlite 는 제약만 바꾸는 ALTER 가 없어서 표를 다시 만들어야 한다. 판단은
+    sqlite_master 에 적힌 CREATE 문 원문을 보고 한다.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='user_menus'").fetchone()
+    if row is None:
+        return False
+    return "'servers'" not in (row["sql"] or "")
+
+
 def pending_migrations(conn):
     """적용해야 할 변경 목록을 사람이 읽을 수 있는 문자열로 돌려준다."""
     todo = []
@@ -543,9 +759,28 @@ def pending_migrations(conn):
               # v6 : 메뉴 권한과 패치 저장소
               "user_menus", "user_patch_sites", "patch_version_rules", "patch_roots",
               "patch_sites", "patch_products", "patch_modules", "patch_files",
-              "patch_scans"):
+              "patch_scans",
+              # v8 : SSH 중계
+              "ssh_servers", "ssh_grants", "ssh_commands", "relay_agents",
+              "relay_enroll_codes", "relay_jobs", "term_sessions", "term_inputs"):
         if not table_exists(conn, t):
             todo.append("CREATE TABLE %s" % t)
+    # v8 : 기존 표에 더하는 컬럼과 CHECK 제약 변경
+    if table_exists(conn, "sessions") and "server_id" not in column_names(conn, "sessions"):
+        todo.append("sessions.server_id 추가")
+    if table_exists(conn, "users"):
+        ucols = column_names(conn, "users")
+        if "ssh_all_servers" not in ucols:
+            todo.append("users.ssh_all_servers 추가")
+        if "ssh_level" not in ucols:
+            todo.append("users.ssh_level 추가")
+    if menu_check_outdated(conn):
+        todo.append("user_menus 재작성 (서버 메뉴 키 허용)")
+    # v9 : 중계를 사람마다 둔다
+    if table_exists(conn, "relay_agents") and "owner_id" not in column_names(conn, "relay_agents"):
+        todo.append("relay_agents.owner_id 추가")
+    if table_exists(conn, "relay_jobs") and "owner_id" not in column_names(conn, "relay_jobs"):
+        todo.append("relay_jobs.owner_id 추가")
     if table_exists(conn, "users") and "patch_all_sites" not in column_names(conn, "users"):
         todo.append("users.patch_all_sites 추가")
     # v7 : 모듈/파일 단위 공개 여부
@@ -614,8 +849,23 @@ def migrate(verbose=True):
             creates = [x for x in stmts if not x.upper().lstrip().startswith("CREATE INDEX")]
             indexes = [x for x in stmts if x.upper().lstrip().startswith("CREATE INDEX")]
 
+            # --- v8 : user_menus 의 CHECK 제약에 'servers' 를 넣는다 ---------
+            # 먼저 이름을 비켜 두면 아래 CREATE TABLE IF NOT EXISTS 가 새 제약으로
+            # 만들어 준다. 그 다음에 옮겨 담고 헌 표를 버린다.
+            rebuild_menus = menu_check_outdated(conn)
+            if rebuild_menus:
+                conn.execute("ALTER TABLE user_menus RENAME TO user_menus_old")
+
             for stmt in creates:
                 conn.execute(stmt)
+
+            if rebuild_menus:
+                n = conn.execute(
+                    "INSERT OR IGNORE INTO user_menus (user_id, menu_key, granted_at, granted_by)"
+                    " SELECT user_id, menu_key, granted_at, granted_by FROM user_menus_old"
+                    " WHERE menu_key IN ('chat', 'notes', 'patch', 'servers')").rowcount
+                conn.execute("DROP TABLE user_menus_old")
+                steps.append("user_menus 재작성, 기존 권한 %d건 그대로 옮김" % n)
 
             if not fresh:
                 cols = column_names(conn, "sessions")
@@ -668,6 +918,45 @@ def migrate(verbose=True):
                     conn.execute("ALTER TABLE %s ADD COLUMN is_visible "
                                  "INTEGER NOT NULL DEFAULT 1" % t)
                     steps.append("%s.is_visible 추가 (기본 1 = 보임)" % t)
+
+            # --- v8 : SSH 중계 ------------------------------------------
+            # 대화 하나에 서버 하나. 기존 대화는 붙은 서버가 없다(NULL).
+            if "server_id" not in column_names(conn, "sessions"):
+                conn.execute("ALTER TABLE sessions ADD COLUMN server_id INTEGER "
+                             "REFERENCES ssh_servers(id)")
+                steps.append("sessions.server_id 추가 (기존 대화는 붙은 서버 없음)")
+
+            # 기본을 "꺼짐 / 고른 것만" 으로 둔다. 마이그레이션만으로 아무도
+            # 서버에 붙을 수 있게 되면 안 된다. 관리자가 직접 켠다.
+            ucols = column_names(conn, "users")
+            if "ssh_all_servers" not in ucols:
+                conn.execute("ALTER TABLE users ADD COLUMN ssh_all_servers "
+                             "INTEGER NOT NULL DEFAULT 0")
+                steps.append("users.ssh_all_servers 추가 (기본 0 = 고른 서버만)")
+            if "ssh_level" not in ucols:
+                conn.execute("ALTER TABLE users ADD COLUMN ssh_level TEXT NOT NULL "
+                             "DEFAULT 'off'")
+                steps.append("users.ssh_level 추가 (기본 off = 아무도 못 붙는다)")
+
+            # --- v9 : 중계를 사람마다 둔다 --------------------------------
+            # 사람마다 자기 VDI 에 중계를 깔고 자기 키로 붙는다. 그래서 일에도
+            # 중계에도 "누구 것인지" 가 붙어야 한다. 기존 행(있다면)은 NULL 로
+            # 남고, NULL 은 "주인 없는 중계" 라서 아무 일도 가져가지 못한다.
+            if "owner_id" not in column_names(conn, "relay_agents"):
+                conn.execute("ALTER TABLE relay_agents ADD COLUMN owner_id INTEGER "
+                             "REFERENCES users(id)")
+                # 주인이 없는 중계는 이제 아무 일도 받아 갈 수 없다(일마다 주인이
+                # 붙는다). 그런데 목록에는 '붙어 있음' 으로 보인다. 할 수 없는
+                # 일을 할 수 있는 것처럼 보여 주면 안 되므로 그 자리에서 끊는다.
+                # 쓰던 사람은 등록 코드를 새로 받아 다시 등록하면 된다.
+                n = conn.execute(
+                    "UPDATE relay_agents SET revoked_at = ? WHERE revoked_at IS NULL",
+                    (ts(),)).rowcount
+                steps.append("relay_agents.owner_id 추가 (주인 없는 중계 %d대 해제)" % n)
+            if "owner_id" not in column_names(conn, "relay_jobs"):
+                conn.execute("ALTER TABLE relay_jobs ADD COLUMN owner_id INTEGER "
+                             "REFERENCES users(id)")
+                steps.append("relay_jobs.owner_id 추가")
 
             # 내장 버전 규칙. 표를 처음 만들 때만 넣는다.
             if not had_version_rules:

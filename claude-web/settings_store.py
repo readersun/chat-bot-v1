@@ -63,6 +63,38 @@ SETTING_DEFS = [
     {"key": "max_concurrent_claude", "label": "최대 동시 실행", "type": "int",
      "min": 1, "max": 32, "restart": False,
      "help": "서버 전체에서 동시에 실행할 Claude 요청 수. 세션 단위 lock 은 별도로 항상 동작"},
+
+    # --- SSH 중계 (v8) ---------------------------------------------------
+    # group 을 'relay' 로 둔다. Claude 설정 화면은 자기가 그릴 키만 집어 가므로
+    # 여기 항목은 그 화면에 섞이지 않는다. 그리는 자리는 /admin/relay 다.
+    {"key": "relay_policy", "label": "기본 정책", "type": "choice",
+     "choices": ["read", "write"], "restart": False, "group": "relay",
+     "help": "read = 조회만 허용. write = 변경도 허용하되 승인 카드를 받는다. "
+             "사람마다 받은 등급보다 이 천장이 낮으면 천장이 이긴다"},
+    {"key": "relay_poll_seconds", "label": "중계 대기 시간 (초)", "type": "int",
+     "min": 5, "max": 60, "restart": False, "group": "relay",
+     "help": "중계가 할 일을 기다리는 시간. gunicorn 스레드 하나를 그만큼 잡고 "
+             "있으므로 늘릴 때는 deploy/gunicorn.conf.py 의 threads 를 함께 본다"},
+    {"key": "relay_run_timeout", "label": "명령 하나 최대 (초)", "type": "int",
+     "min": 5, "max": 120, "restart": False, "group": "relay",
+     "help": "이 시간을 넘기면 중계가 끊고 실패로 올린다"},
+    {"key": "relay_approval_seconds", "label": "승인 대기 (초)", "type": "int",
+     "min": 30, "max": 600, "restart": False, "group": "relay",
+     "help": "이 시간 안에 승인하지 않으면 취소된다. 승인 카드에 남은 시간을 보여 준다"},
+    {"key": "relay_term_max_per_user", "label": "한 사람 동시 터미널", "type": "int",
+     "min": 1, "max": 4, "restart": False, "group": "relay",
+     "help": "워커 1개 / 스레드 8개로 도는 서버다. 이 값을 올리면 채팅이 느려진다"},
+    {"key": "relay_term_idle_seconds", "label": "터미널 자동 닫기 (초)", "type": "int",
+     "min": 30, "max": 1800, "restart": False, "group": "relay",
+     "help": "브라우저가 이만큼 조용하면 그 터미널을 닫는다. 끊긴 세션을 서버 "
+             "쪽에 남겨 두면 다음 사람이 붙지 못한다"},
+    {"key": "relay_chat_max_commands", "label": "한 질문당 명령 수", "type": "int",
+     "min": 1, "max": 5, "restart": False, "group": "relay",
+     "help": "챗봇이 한 번의 질문에 고를 수 있는 명령 수. 넘으면 그만둔다"},
+    {"key": "relay_queue_keep_days", "label": "중계 큐 보관 (일)", "type": "int",
+     "min": 7, "max": 365, "restart": False, "group": "relay",
+     "help": "전송 큐(relay_jobs)의 끝난 행만 이 기간 뒤에 정리한다. "
+             "기록(누가 언제 무엇을)은 지우지 않는다"},
 ]
 
 DEFS_BY_KEY = {d["key"]: d for d in SETTING_DEFS}
@@ -121,6 +153,20 @@ def mask(value):
 
 def encryption_available():
     return _fernet() is not None
+
+
+# ---------------------------------------------------------------------------
+# settings 밖에서 쓰는 암호화 (SSH 서버의 비밀번호)
+#
+# 키 파생 방법을 두 군데에 적어 두면 한쪽만 바뀌는 날 복호화가 조용히 실패한다.
+# 그래서 저장 위치가 다른 값도 이 두 함수를 통해서만 암호화한다.
+# ---------------------------------------------------------------------------
+def encrypt_secret(value):
+    return _encrypt(value)
+
+
+def decrypt_secret(value):
+    return _decrypt(value)
 
 
 # ---------------------------------------------------------------------------

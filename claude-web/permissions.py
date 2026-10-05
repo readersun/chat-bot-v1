@@ -294,12 +294,13 @@ def visible_sessions_clause(user, scope="all"):
 # 레일에서 항목을 안 그리는 것은 권한이 아니다. 주소를 직접 치면 들어간다.
 # 그래서 화면과 API 양쪽에 require_menu 를 건다.
 # ---------------------------------------------------------------------------
-MENUS = ("chat", "notes", "patch")
+MENUS = ("chat", "notes", "patch", "servers")
 
-MENU_LABELS = {"chat": "채팅", "notes": "메모", "patch": "패치"}
+MENU_LABELS = {"chat": "채팅", "notes": "메모", "patch": "패치", "servers": "서버"}
 
 # 메뉴를 하나도 못 받은 사람을 어디로 보낼지. 가진 것 중 첫 번째다.
-MENU_PATHS = {"chat": "/", "notes": "/notes", "patch": "/patch"}
+MENU_PATHS = {"chat": "/", "notes": "/notes", "patch": "/patch",
+              "servers": "/servers"}
 
 # 신규 사용자 기본값. 패치는 고객사에 나가는 바이너리라 기본으로 열지 않는다.
 DEFAULT_NEW_USER_MENUS = ("chat",)
@@ -429,3 +430,160 @@ def set_user_patch_sites(db, user_id, all_sites, site_ids, granted_by=None):
                 " VALUES (?,?,?,?)",
                 [(user_id, sid, ts(), granted_by) for sid in keep])
     return keep
+
+
+# ---------------------------------------------------------------------------
+# SSH 중계 : 사용 허용 (v8)
+#
+# 겹이 셋이다. 섞이지 않는다.
+#
+#   1. servers 메뉴          문이 열리는가            (user_menus)
+#   2. 등급 ssh_level        조회만인가 변경까지인가  (users.ssh_level)
+#   3. 범위 ssh_all_servers  어느 서버까지인가        (users / ssh_grants)
+#
+# 등급에는 천장이 하나 더 있다. 관리자 화면의 기본 정책(relay_policy)이다.
+# 사람마다 '조회+변경' 을 받아 뒀어도 정책이 '조회만' 이면 변경 명령은 나가지
+# 않는다. 둘 중 낮은 것이 이긴다. 정책 하나로 전사를 되돌릴 수 있어야 한다.
+#
+# 등급과 승인은 **챗봇이 스스로 고른 명령에만** 걸린다. 웹 터미널에서 사람이
+# 직접 치는 줄은 등급을 매기지 않는다. 브라우저가 PuTTY 를 대신하는 것일 뿐이고
+# 그 사람의 계정 권한이 늘지 않는다. (기록은 양쪽 다 남긴다)
+# ---------------------------------------------------------------------------
+SSH_OFF = "off"
+SSH_READ = "read"
+SSH_WRITE = "write"
+SSH_LEVELS = (SSH_OFF, SSH_READ, SSH_WRITE)
+
+_SSH_RANK = {SSH_OFF: 0, SSH_READ: 1, SSH_WRITE: 2}
+
+SSH_LEVEL_LABELS = {
+    SSH_OFF: "꺼짐",
+    SSH_READ: "조회만",
+    SSH_WRITE: "조회 + 변경(승인받고)",
+}
+
+
+def ssh_policy(db):
+    """시스템 전체 천장. 'read' 또는 'write'. 기본은 조회만이다."""
+    import settings_store
+    v = (settings_store.get(db, "relay_policy", SSH_READ) or SSH_READ).strip().lower()
+    return v if v in (SSH_READ, SSH_WRITE) else SSH_READ
+
+
+def _stored_ssh_level(user):
+    try:
+        v = (user["ssh_level"] or SSH_OFF).strip().lower()
+    except (IndexError, KeyError):
+        return SSH_OFF          # 마이그레이션 전 행. 아무것도 열지 않는다.
+    return v if v in SSH_LEVELS else SSH_OFF
+
+
+def ssh_level(db, user):
+    """그 사람에게 실제로 적용되는 등급. 정책 천장을 이미 적용한 값이다."""
+    if not user:
+        return SSH_OFF
+    # 관리자는 이 표를 스스로 고칠 수 있다. 관리자에게만 못 쓰게 두는 것은
+    # 연극이다. 대신 관리자가 한 일도 전부 기록에 남는다.
+    mine = ssh_policy(db) if is_admin(user) else _stored_ssh_level(user)
+    cap = ssh_policy(db)
+    return mine if _SSH_RANK[mine] <= _SSH_RANK[cap] else cap
+
+
+def ssh_can_read(db, user):
+    return _SSH_RANK[ssh_level(db, user)] >= 1
+
+
+def ssh_can_write(db, user):
+    return _SSH_RANK[ssh_level(db, user)] >= 2
+
+
+def ssh_all_servers(user):
+    if not user:
+        return False
+    if is_admin(user):
+        return True
+    try:
+        return bool(user["ssh_all_servers"])
+    except (IndexError, KeyError):
+        return False            # 마이그레이션 전 행. 기본은 '고른 것만' 이다.
+
+
+def allowed_server_ids(db, user):
+    """쓸 수 있는 서버 id 집합. None 이면 '전부' 라는 뜻이다."""
+    if ssh_all_servers(user):
+        return None
+    rows = db.execute("SELECT server_id FROM ssh_grants WHERE user_id = ?",
+                      (user["id"],)).fetchall()
+    return {r["server_id"] for r in rows}
+
+
+def visible_servers_clause(db, user, alias="s"):
+    """
+    서버 목록을 DB 단계에서 걸러낸다. 반환: (where 조각, 파라미터 list).
+
+    화면에서 숨기는 것은 막은 것이 아니다. 목록 질의와 각 동작(터미널 열기,
+    명령 실행, 대화에 붙이기) 양쪽에서 같은 규칙을 다시 본다.
+    """
+    if ssh_level(db, user) == SSH_OFF:
+        return "0", []
+    ids = allowed_server_ids(db, user)
+    if ids is None:
+        return "1", []
+    if not ids:
+        return "0", []
+    marks = ",".join("?" for _ in ids)
+    return "%s.id IN (%s)" % (alias, marks), sorted(ids)
+
+
+def can_use_server(db, user, server_row):
+    if server_row is None:
+        return False
+    if ssh_level(db, user) == SSH_OFF:
+        return False
+    ids = allowed_server_ids(db, user)
+    return ids is None or server_row["id"] in ids
+
+
+def require_server(db, user, server_row):
+    """서버 하나를 쓸 수 있는지. 못 쓰면 403 이다. 404 로 숨기지 않는다.
+
+    있는지 없는지를 숨겨 봐야 이름은 목록 어디서든 보인다. 대신 왜 막혔는지를
+    말해 줘야 사용자가 관리자에게 무엇을 요청할지 안다.
+    """
+    if not user:
+        abort(401, "로그인이 필요합니다.")
+    if server_row is None:
+        abort(404, "서버를 찾을 수 없습니다.")
+    if ssh_level(db, user) == SSH_OFF:
+        abort(403, "서버 사용이 허용되지 않았습니다. 관리자에게 요청하세요.")
+    if not can_use_server(db, user, server_row):
+        abort(403, "%s 서버는 사용 허용 범위에 없습니다. 관리자에게 요청하세요."
+              % server_row["name"])
+
+
+def set_user_ssh(db, user_id, level, all_servers, server_ids, granted_by=None):
+    """
+    한 사람의 등급과 범위를 통째로 교체한다. 반환: (등급, 남은 서버 id 목록)
+
+    등급을 끄면 범위도 비운다. 꺼진 사람의 표에 서버가 남아 있으면 다음에 다시
+    켤 때 예전 범위가 조용히 되살아난다.
+    """
+    from db import ts
+    lv = (level or SSH_OFF).strip().lower()
+    if lv not in SSH_LEVELS:
+        lv = SSH_OFF
+    all_flag = 1 if (all_servers and lv != SSH_OFF) else 0
+    db.execute("UPDATE users SET ssh_level = ?, ssh_all_servers = ? WHERE id = ?",
+               (lv, all_flag, user_id))
+    db.execute("DELETE FROM ssh_grants WHERE user_id = ?", (user_id,))
+    keep = []
+    if lv != SSH_OFF and not all_flag:
+        for sid in sorted({int(x) for x in server_ids}):
+            if db.execute("SELECT 1 FROM ssh_servers WHERE id = ?", (sid,)).fetchone():
+                keep.append(sid)
+        if keep:
+            db.executemany(
+                "INSERT INTO ssh_grants (user_id, server_id, granted_at, granted_by)"
+                " VALUES (?,?,?,?)",
+                [(user_id, sid, ts(), granted_by) for sid in keep])
+    return lv, keep
