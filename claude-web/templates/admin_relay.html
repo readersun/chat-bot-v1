@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>중계 설정 · chat-bot</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+/* =========================================================================
+   중계 설정 (운영)
+
+   탭 셋. 연결과 등록 / 사용 허용 / 기록.
+   패치 설정과 같은 모양을 쓴다. 운영 화면끼리 다르게 생기면 어디서 무엇을
+   하는지 매번 다시 익혀야 한다.
+   ========================================================================= */
+@media (min-width: 900px) {
+  body { display: grid; grid-template-columns: 220px minmax(0, 1fr); }
+}
+.shell-main { min-width: 0; }
+
+#rail-toggle {
+  flex: 0 0 auto; width: 40px; height: 40px; margin-left: -6px;
+  border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text);
+  display: grid; place-items: center; cursor: pointer;
+}
+#rail-toggle:hover { background: var(--panel2); }
+#rail-toggle svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; pointer-events: none;
+}
+@media (min-width: 900px) { #rail-toggle { display: none; } }
+
+.page-head { margin: 0 0 var(--s4); }
+.page-head h1 { margin: 0; font-size: 24px; line-height: 1.4; letter-spacing: -.005em; }
+.page-head p { margin: 5px 0 0; font-size: 13.5px; line-height: 1.7; color: var(--muted); }
+
+/* 탭. 선으로 가르지 않고 알약으로 둔다 */
+.tabs { display: flex; flex-wrap: wrap; gap: var(--s1); margin: 0 0 var(--s5); }
+.tabs a {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 0 16px;
+  border-radius: var(--r-pill);
+  background: transparent; color: var(--muted);
+  font-size: 13.5px; text-decoration: none;
+}
+.tabs a:hover { background: var(--panel); color: var(--text); }
+.tabs a.on { background: var(--accent-soft); color: var(--accent-press); font-weight: 600; }
+
+#alerts:not(:empty) { margin-bottom: var(--s4); }
+
+/* VDI 에 적어 줄 두 줄. 터미널에 그대로 치는 글자라서 어두운 판에 둔다 */
+.handout {
+  margin: var(--s3) 0 0;
+  padding: var(--s4) var(--s5);
+  border-radius: var(--r-sm);
+  background: #151a1f; color: #e7ecf0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px; line-height: 1.9;
+  overflow-x: auto;
+}
+.handout .k { color: #8b98a4; }
+.code-big {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 30px; font-weight: 600; letter-spacing: .14em;
+  font-variant-numeric: tabular-nums;
+}
+
+.row-gap { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.grid-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 var(--s5); }
+
+/* 라디오 묶음 */
+.radios { display: flex; flex-direction: column; gap: var(--s2); }
+.radios label {
+  display: flex; align-items: flex-start; gap: var(--s2);
+  font-size: 14px; line-height: 1.7;
+}
+.radios input { margin-top: 4px; width: 18px; height: 18px; flex: 0 0 auto; }
+.radios .why { display: block; font-size: 12.5px; color: var(--muted); }
+.radios label.off { opacity: .5; }
+
+/* 사용 허용 표의 서버 고르기 */
+.srv-picks { display: flex; flex-wrap: wrap; gap: var(--s1); margin-top: var(--s2); }
+.srv-picks label {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: var(--r-pill);
+  background: var(--panel2); font-size: 12.5px; cursor: pointer;
+}
+.srv-picks input { width: 16px; height: 16px; }
+
+td.cmd {
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  max-width: 420px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12.5px;
+}
+.lines {
+  margin: var(--s2) 0 0; padding: var(--s3) var(--s4);
+  border-radius: var(--r-sm); background: var(--code-bg);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12.5px; line-height: 1.8;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 320px; overflow-y: auto;
+}
+.filters { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin-bottom: var(--s4); }
+.filters select { min-height: 36px; border: 0; border-radius: var(--r-sm); background: var(--panel2); color: var(--text); font: inherit; font-size: 13.5px; padding: 0 var(--s2); }
+.chips { display: flex; gap: var(--s1); }
+.chips button {
+  min-height: 34px; padding: 0 14px; border: 0; border-radius: var(--r-pill);
+  background: var(--panel2); color: var(--muted); font: inherit; font-size: 13px; cursor: pointer;
+}
+.chips button.on { background: var(--accent-soft); color: var(--accent-press); font-weight: 600; }
+</style>
+</head>
+<body>
+
+{% include "_rail.html" %}
+
+<div class="shell-main">
+
+<header class="top">
+  <button id="rail-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+  </button>
+  <span class="brand">{{ page_title }}</span>
+  <span class="spacer"></span>
+</header>
+
+<main class="page" id="page" data-tab="{{ tab }}">
+  <div class="page-head">
+    <h1>중계 설정</h1>
+    <p>사내망 서버에 붙는 길을 여기서 관리합니다. 설정은 웹에만 있고, VDI 에서
+       손으로 적는 것은 서버 주소와 등록 코드 두 줄뿐입니다.</p>
+  </div>
+
+  <nav class="tabs" aria-label="중계 설정 탭">
+    <a href="/admin/relay" class="{{ 'on' if tab == 'connect' }}">연결과 등록</a>
+    <a href="/admin/relay/grants" class="{{ 'on' if tab == 'grants' }}">사용 허용</a>
+    <a href="/admin/relay/log" class="{{ 'on' if tab == 'log' }}">기록</a>
+  </nav>
+
+  <div id="alerts" role="status" aria-live="polite"></div>
+  <div id="content"></div>
+</main>
+
+</div><!-- /.shell-main -->
+
+<script src="/static/rail.js" defer></script>
+<script>
+(function () {
+  "use strict";
+
+  var TAB = document.getElementById("page").dataset.tab;
+  var CSRF = {{ csrf|tojson }};
+  var content = document.getElementById("content");
+  var alerts = document.getElementById("alerts");
+
+  /* ----------------------------------------------------------- DOM 헬퍼 */
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (k) {
+      if (k === "class") { n.className = props[k]; }
+      else if (k === "text") { n.textContent = props[k]; }
+      else if (k.slice(0, 2) === "on") { n[k] = props[k]; }
+      else if (props[k] !== null && props[k] !== undefined) { n.setAttribute(k, props[k]); }
+    });
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined) { return; }
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+  function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
+
+  function notify(msg, kind) {
+    var box = el("div", { class: "alert " + (kind || "ok"), role: "alert", text: msg });
+    clear(alerts);
+    alerts.appendChild(box);
+    window.scrollTo(0, 0);
+    if (kind !== "error") {
+      setTimeout(function () { if (box.parentNode) { box.parentNode.removeChild(box); } }, 6000);
+    }
+  }
+
+  function api(method, url, body) {
+    var opt = { method: method, headers: { "X-CSRF-Token": CSRF }, credentials: "same-origin" };
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    return fetch(url, opt).then(function (res) {
+      return res.json().catch(function () {
+        return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+      }).then(function (data) {
+        if (!res.ok) { throw new Error((data && data.error) || ("HTTP " + res.status)); }
+        return data;
+      });
+    });
+  }
+
+  function modal(opts) {
+    return new Promise(function (resolve) {
+      var ov = el("div", { class: "overlay" });
+      var box = el("div", { class: "modal", role: "dialog", "aria-modal": "true" });
+      box.appendChild(el("h3", { text: opts.title }));
+      if (opts.message) { box.appendChild(el("p", { text: opts.message })); }
+      if (opts.node) { box.appendChild(opts.node); }
+      /* 읽기만 하는 창에는 「취소」를 두지 않는다. 취소할 것이 없는데 단추가
+         있으면 "취소하면 뭐가 되돌아가지" 를 한 번 생각하게 만든다. */
+      var cancel = opts.readOnly
+        ? null : el("button", { class: "btn", type: "button", text: "취소" });
+      var ok = el("button", { class: "btn " + (opts.danger ? "danger" : "primary"),
+                              type: "button", text: opts.confirmText || "확인" });
+      box.appendChild(el("div", { class: "actions" }, cancel ? [cancel, ok] : [ok]));
+      function done(v) {
+        document.removeEventListener("keydown", onKey);
+        if (ov.parentNode) { ov.parentNode.removeChild(ov); }
+        resolve(v);
+      }
+      function onKey(e) { if (e.key === "Escape") { done(null); } }
+      if (cancel) { cancel.onclick = function () { done(null); }; }
+      ok.onclick = function () { done(true); };
+      ov.onclick = function (e) { if (e.target === ov) { done(null); } };
+      document.addEventListener("keydown", onKey);
+      ov.appendChild(box);
+      document.body.appendChild(ov);
+      ok.focus();
+    });
+  }
+
+  function block(title, desc, kids) {
+    return el("section", { class: "block" },
+      [el("h2", { text: title })]
+        .concat(desc ? [el("p", { class: "desc", text: desc })] : [])
+        .concat(kids || []));
+  }
+
+  function kv(pairs) {
+    var kids = [];
+    pairs.forEach(function (p) {
+      if (p[1] === null || p[1] === undefined) { return; }
+      kids.push(el("dt", { text: p[0] }));
+      kids.push(el("dd", {}, [typeof p[1] === "string"
+        ? document.createTextNode(p[1]) : p[1]]));
+    });
+    return el("dl", { class: "kv" }, kids);
+  }
+
+  function stat(n, label) {
+    return el("div", { class: "stat" }, [
+      el("div", { class: "n", text: String(n) }),
+      el("div", { class: "l", text: label })]);
+  }
+
+  function ago(stamp) {
+    if (!stamp) { return "없음"; }
+    var t = Date.parse(String(stamp).replace(" ", "T"));
+    if (isNaN(t)) { return stamp; }
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) { return s + "초 전"; }
+    if (s < 3600) { return Math.round(s / 60) + "분 전"; }
+    if (s < 86400) { return Math.round(s / 3600) + "시간 전"; }
+    return String(stamp).slice(0, 16);
+  }
+
+  /* =======================================================================
+     탭 1 : 연결과 등록
+     ===================================================================== */
+  var SETTING_DEFS = [
+    { key: "relay_poll_seconds", label: "중계 대기 시간 (초)", min: 5, max: 60,
+      help: "중계가 할 일을 기다리는 시간. 스레드 하나를 그만큼 잡는다" },
+    { key: "relay_run_timeout", label: "명령 하나 최대 (초)", min: 5, max: 120,
+      help: "넘기면 중계가 끊고 실패로 올린다" },
+    { key: "relay_approval_seconds", label: "승인 대기 (초)", min: 30, max: 600,
+      help: "이 시간 안에 안 누르면 취소된다" },
+    { key: "relay_term_max_per_user", label: "한 사람 동시 터미널", min: 1, max: 4,
+      help: "올리면 채팅이 느려진다" },
+    { key: "relay_term_idle_seconds", label: "터미널 자동 닫기 (초)", min: 30, max: 1800,
+      help: "브라우저가 이만큼 조용하면 닫는다" },
+    { key: "relay_chat_max_commands", label: "한 질문당 명령 수", min: 1, max: 5,
+      help: "챗봇이 한 번에 고를 수 있는 명령 수" },
+    { key: "relay_queue_keep_days", label: "중계 큐 보관 (일)", min: 7, max: 365,
+      help: "전송 큐의 끝난 행만 정리한다. 기록은 지우지 않는다" }
+  ];
+
+  function renderConnect(d) {
+    clear(content);
+
+    if (d.insecure_warning) { notify(d.insecure_warning, "warn"); }
+
+    /* --- 붙어 있는 중계 (사람마다 한 대) --- */
+    var agents = d.agents || [];
+    var rows = agents.map(function (a) {
+      return el("tr", {}, [
+        el("td", {}, [
+          el("div", { text: a.owner }),
+          el("div", { class: "muted", style: "font-size:12.5px",
+                      text: a.name || "(이름 없음)" })
+        ]),
+        el("td", {}, [
+          a.revoked_at
+            ? el("span", { class: "badge", text: "해제됨" })
+            : (a.live
+                ? el("span", { class: "badge ok" },
+                     [el("span", { class: "dot" }), "붙어 있음"])
+                : el("span", { class: "badge warn", text: "조용함" }))
+        ]),
+        el("td", { class: "muted", text: ago(a.last_seen_at) }),
+        el("td", { class: "muted", text: (a.version || "-") + " · " + (a.os || "-") }),
+        el("td", { class: "muted",
+                   text: (a.ip || "-") + (a.scheme ? " · " + a.scheme : "") }),
+        el("td", {}, [
+          a.revoked_at ? null
+            : el("button", { class: "btn sm danger", type: "button",
+                onclick: function () { revoke(a.id, a.owner); } }, ["끊기"])
+        ])
+      ]);
+    });
+
+    content.appendChild(block("붙어 있는 중계",
+      "사람마다 자기 VDI 에 중계를 깔고 자기 키로 서버에 붙습니다. 일은 그 사람의 "
+      + "중계로만 나갑니다. 챗봇 서버가 VDI 로 거는 연결은 없습니다.", [
+      agents.length
+        ? el("div", { class: "table-wrap" }, [
+            el("table", {}, [
+              el("thead", {}, [el("tr", {}, [
+                el("th", { scope: "col", text: "사람 / 중계" }),
+                el("th", { scope: "col", text: "상태" }),
+                el("th", { scope: "col", text: "신호" }),
+                el("th", { scope: "col", text: "버전 / OS" }),
+                el("th", { scope: "col", text: "붙은 주소" }),
+                el("th", { scope: "col", text: "" })
+              ])]),
+              el("tbody", {}, rows)
+            ])
+          ])
+        : el("p", { class: "desc",
+            text: "아직 등록된 중계가 없습니다. 쓰는 사람이 서버 화면의 "
+                  + "「내 중계」에서 프로그램을 받아 설치하고 등록 코드를 넣습니다." })
+    ]));
+
+    /* --- 중계 프로그램 --- */
+    var prog = d.program;
+    var progKids = [];
+    if (prog) {
+      progKids.push(kv([
+        ["파일", prog.name],
+        ["크기", bytes(prog.size)],
+        ["sha256", el("span", { class: "mono", style: "font-size:12px",
+                                text: prog.sha256 })],
+        ["올린 사람", prog.uploaded_by + " · " + prog.uploaded_at]
+      ]));
+    } else {
+      progKids.push(el("p", { class: "desc",
+        text: "아직 올라와 있지 않습니다. 올리기 전에는 사용자가 받을 수 없습니다." }));
+    }
+
+    var picker = el("input", { type: "file", id: "prog-file",
+                               accept: ".exe,.py,.zip" });
+    progKids.push(el("div", { class: "row-gap", style: "margin-top:var(--s4)" }, [
+      picker,
+      el("button", { class: "btn primary", type: "button", onclick: uploadProgram },
+         [prog ? "바꾸기" : "올리기"]),
+      prog ? el("button", { class: "btn danger", type: "button",
+                            onclick: removeProgram }, ["내리기"]) : null
+    ]));
+    progKids.push(el("p", { class: "desc", style: "margin-top:var(--s3)",
+      text: "사용자는 서버 화면에서 이 파일을 받습니다. 받는 화면에 sha256 이 함께 "
+            + "보이므로, 받은 사람이 같은 파일인지 확인할 수 있습니다. 최대 "
+            + d.program_max_mb + "MB."}));
+    content.appendChild(block("중계 프로그램",
+      "VDI 에서 돌릴 relay.exe 를 여기에 한 번 올려 둡니다. 만드는 방법은 "
+      + "relay_agent/README.md 에 있습니다.", progKids));
+
+    /* --- 오늘 --- */
+    var c = d.counts || {};
+    content.appendChild(block("오늘", null, [
+      el("div", { class: "stats" }, [
+        stat(c.cmds || 0, "챗봇이 고른 명령"),
+        stat(c.approved || 0, "승인받아 실행"),
+        stat(c.terms_open || 0, "열려 있는 터미널"),
+        stat((c.servers_on || 0) + " / " + (c.servers || 0), "쓸 수 있는 서버")
+      ])
+    ]));
+
+    /* --- 정책 --- */
+    var pol = el("div", { class: "radios" }, [
+      radio("relay_policy", "read", d.settings.relay_policy,
+            "조회만", "서버를 읽기만 한다. 바꾸는 명령은 승인 카드도 만들지 않는다."),
+      radio("relay_policy", "write", d.settings.relay_policy,
+            "조회 + 변경(승인받고)",
+            "바꾸는 명령은 사람이 승인 카드를 눌러야 나간다. 누르지 않으면 2분 뒤 취소된다."),
+      lockedRadio("승인 없이 전부",
+            "만들지 않는다. 고를 수 있게 두면 언젠가 눌린다.")
+    ]);
+    content.appendChild(block("기본 정책",
+      "사람마다 받은 등급보다 이 천장이 낮으면 천장이 이깁니다. 정책 하나로 "
+      + "전사를 되돌릴 수 있어야 합니다.", [pol]));
+
+    /* --- 숫자 설정 --- */
+    var fields = el("div", { class: "grid-fields" }, SETTING_DEFS.map(function (s) {
+      return el("div", { class: "field" }, [
+        el("label", { text: s.label, "for": "s-" + s.key }),
+        el("input", { type: "number", id: "s-" + s.key, min: s.min, max: s.max,
+                      value: d.settings[s.key] || "" }),
+        el("div", { class: "help", text: s.help })
+      ]);
+    }));
+    content.appendChild(block("시간과 개수",
+      "터미널 왕복 5초 < 중계 대기 25초 < gunicorn 300 < nginx 360. 이 순서가 "
+      + "깨지면 긴 요청이 중간에서 끊깁니다.", [
+      fields,
+      el("div", { class: "row-gap", style: "margin-top:var(--s4)" }, [
+        el("button", { class: "btn primary", type: "button", onclick: saveSettings },
+           ["저장"])
+      ])
+    ]));
+
+    /* 암호화 상태. 두 가지를 구분해서 알려 준다.
+         - 지금 암호화할 수 없다  : 비밀번호 저장이 막혀 있다 (평문으로 넣지 않는다)
+         - 평문이 남아 있다       : 예전에 들어간 값. 다시 저장해야 암호화된다 */
+    var encRows = [];
+    if (!d.encrypted) {
+      encRows.push(el("div", { class: "alert warn",
+        text: "cryptography 패키지가 없어 서버 비밀번호를 암호화할 수 없습니다. "
+              + "그래서 비밀번호 저장은 거부됩니다(평문으로 넣지 않습니다). "
+              + "pip install cryptography 로 설치하거나 키 인증을 쓰세요." }));
+    }
+    if (d.plaintext_secrets) {
+      encRows.push(el("div", { class: "alert warn",
+        text: "암호화되지 않은 서버 비밀번호가 " + d.plaintext_secrets + "건 남아 있습니다. "
+              + "cryptography 없이 저장된 값입니다. 해당 서버를 열어 비밀번호를 "
+              + "다시 저장하면 암호화됩니다." }));
+    }
+    if (encRows.length) {
+      content.appendChild(block("암호화", null, encRows));
+    }
+  }
+
+  function radio(name, value, current, label, why) {
+    var input = el("input", { type: "radio", name: name, value: value });
+    input.checked = (current || "read") === value;
+    input.onchange = function () { savePolicy(value); };
+    return el("label", {}, [input,
+      el("span", {}, [label, el("span", { class: "why", text: why })])]);
+  }
+
+  function lockedRadio(label, why) {
+    var input = el("input", { type: "radio", disabled: "disabled" });
+    return el("label", { class: "off" }, [input,
+      el("span", {}, [label, el("span", { class: "why", text: why })])]);
+  }
+
+  function savePolicy(value) {
+    api("POST", "/api/admin/relay/settings", { relay_policy: value })
+      .then(function () { notify("기본 정책을 바꿨습니다. 다음 질문부터 적용됩니다."); })
+      .catch(function (e) { notify(e.message, "error"); });
+  }
+
+  function saveSettings() {
+    var body = {};
+    SETTING_DEFS.forEach(function (s) {
+      var v = document.getElementById("s-" + s.key).value.trim();
+      if (v !== "") { body[s.key] = v; }
+    });
+    api("POST", "/api/admin/relay/settings", body).then(function (d) {
+      notify(d.changed.length ? "저장했습니다." : "바뀐 값이 없습니다.");
+    }).catch(function (e) { notify(e.message, "error"); });
+  }
+
+  function bytes(n) {
+    if (!n) { return "0 B"; }
+    if (n < 1024) { return n + " B"; }
+    if (n < 1048576) { return (n / 1024).toFixed(1) + " KB"; }
+    return (n / 1048576).toFixed(1) + " MB";
+  }
+
+  function uploadProgram() {
+    var f = document.getElementById("prog-file").files[0];
+    if (!f) { notify("파일을 고르세요.", "error"); return; }
+    var fd = new FormData();
+    fd.append("file", f);
+    fetch("/api/admin/relay/program", {
+      method: "POST", credentials: "same-origin",
+      headers: { "X-CSRF-Token": CSRF }, body: fd
+    }).then(function (res) {
+      return res.json().catch(function () { return { ok: false, error: "HTTP " + res.status }; })
+        .then(function (data) {
+          if (!res.ok) { throw new Error(data.error || ("HTTP " + res.status)); }
+          return data;
+        });
+    }).then(function (d) {
+      notify("올렸습니다. 이제 사용자가 서버 화면에서 받을 수 있습니다. (sha256 "
+             + d.program.sha256.slice(0, 16) + "…)");
+      return load();
+    }).catch(function (e) { notify(e.message, "error"); });
+  }
+
+  function removeProgram() {
+    modal({ title: "중계 프로그램 내리기",
+            message: "올려 둔 파일을 지웁니다. 사용자가 받을 수 없게 됩니다.\n\n"
+                     + "이미 설치한 중계는 그대로 돕니다.",
+            confirmText: "내리기", danger: true }).then(function (yes) {
+      if (!yes) { return null; }
+      return api("DELETE", "/api/admin/relay/program").then(function () {
+        notify("내렸습니다.");
+        return load();
+      });
+    }).catch(function (e) { notify(e.message, "error"); });
+  }
+
+  function revoke(agentId, owner) {
+    modal({ title: "중계 끊기",
+            message: (owner || "이 사람") + " 의 중계를 끊습니다. 그 사람이 열어 둔 "
+                     + "터미널도 함께 닫힙니다.\n\n"
+                     + "다시 쓰려면 그 사람이 등록 코드를 새로 받아 VDI 에서 다시 "
+                     + "등록해야 합니다.",
+            confirmText: "끊기", danger: true }).then(function (yes) {
+      if (!yes) { return null; }
+      return api("POST", "/api/admin/relay/revoke", { agent_id: agentId })
+        .then(function (d) {
+          notify("중계를 끊었습니다. 터미널 " + d.terminals_closed + "개가 닫혔습니다.");
+          return load();
+        });
+    }).catch(function (e) { notify(e.message, "error"); });
+  }
+
+  /* =======================================================================
+     탭 2 : 사용 허용
+     ===================================================================== */
+  function renderGrants(d) {
+    clear(content);
+
+    var rows = d.users.map(function (u) {
+      return grantRow(u, d);
+    });
+
+    content.appendChild(block("사용 허용",
+      "등급과 범위를 함께 정합니다. 등급을 주면 「서버」 메뉴도 함께 열리고, "
+      + "끄면 함께 닫히고 그 사람이 열어 둔 터미널도 그 자리에서 닫힙니다.", [
+      el("div", { class: "table-wrap" }, [
+        el("table", {}, [
+          el("thead", {}, [el("tr", {}, [
+            el("th", { scope: "col", text: "사람" }),
+            el("th", { scope: "col", text: "등급" }),
+            el("th", { scope: "col", text: "범위" }),
+            el("th", { scope: "col", text: "" })
+          ])]),
+          el("tbody", {}, rows)
+        ])
+      ])
+    ]));
+
+    content.appendChild(block("왜 두 겹인가", null, [
+      el("p", { class: "desc",
+        text: "등급은 '무엇까지' 이고 범위는 '어느 서버까지' 입니다. 조회만 받은 "
+              + "사람에게는 변경 명령의 승인 카드조차 뜨지 않습니다. 범위 밖의 "
+              + "서버는 목록에도 나오지 않고, 주소를 직접 쳐도 라우트에서 막힙니다. "
+              + "화면에서 숨기는 것은 막은 것이 아니기 때문입니다." }),
+      el("p", { class: "desc",
+        text: "관리자는 이 표로 막지 않습니다. 관리자는 이 표를 스스로 고칠 수 "
+              + "있기 때문입니다. 대신 관리자가 한 일도 기록에 그대로 남습니다." })
+    ]));
+  }
+
+  function grantRow(u, d) {
+    var tds = [];
+    tds.push(el("td", {}, [
+      el("div", { text: u.display_name }),
+      el("div", { class: "muted", style: "font-size:12.5px",
+                  text: u.username + (u.role === "admin" ? " · 관리자" : "")
+                        + (u.is_active ? "" : " · 사용 중지") })
+    ]));
+
+    if (u.locked) {
+      tds.push(el("td", {}, [el("span", { class: "badge ok",
+        text: d.levels.filter(function (x) { return x.key === u.level; })[0].label })]));
+      tds.push(el("td", { class: "muted", text: "전체" }));
+      tds.push(el("td", { class: "muted wrap",
+        text: "관리자. 이 표로 막지 않는다." }));
+      return el("tr", {}, tds);
+    }
+
+    var sel = el("select", {}, d.levels.map(function (x) {
+      return el("option", { value: x.key, text: x.label });
+    }));
+    sel.value = u.level;
+    tds.push(el("td", {}, [sel]));
+
+    var all = el("input", { type: "checkbox" });
+    all.checked = u.all_servers;
+    var picks = el("div", { class: "srv-picks" }, d.servers.map(function (s) {
+      var cb = el("input", { type: "checkbox", value: String(s.id) });
+      cb.checked = u.server_ids.indexOf(s.id) >= 0;
+      return el("label", {}, [cb, s.name + (s.is_enabled ? "" : " (꺼짐)")]);
+    }));
+    function syncPicks() { picks.hidden = all.checked || sel.value === "off"; }
+    all.onchange = syncPicks;
+    sel.onchange = syncPicks;
+    syncPicks();
+
+    tds.push(el("td", { class: "wrap" }, [
+      el("label", { class: "row-gap", style: "font-size:13.5px" },
+        [all, "모든 서버"]),
+      picks
+    ]));
+
+    var btn = el("button", { class: "btn sm primary", type: "button" }, ["적용"]);
+    btn.onclick = function () {
+      var ids = [];
+      picks.querySelectorAll("input[type=checkbox]").forEach(function (cb) {
+        if (cb.checked) { ids.push(parseInt(cb.value, 10)); }
+      });
+      btn.disabled = true;
+      api("PUT", "/api/admin/relay/grants/" + u.id, {
+        level: sel.value, all_servers: all.checked, server_ids: ids
+      }).then(function (r) {
+        notify(u.display_name + " : " + r.level
+               + (r.terminals_closed ? " · 터미널 " + r.terminals_closed + "개 닫음" : ""));
+        return load();
+      }).catch(function (e) {
+        notify(e.message, "error");
+        btn.disabled = false;
+      });
+    };
+    tds.push(el("td", {}, [btn]));
+    return el("tr", {}, tds);
+  }
+
+  /* =======================================================================
+     탭 3 : 기록
+     ===================================================================== */
+  var logState = { days: 7, user_id: 0, server_id: 0, kind: "all" };
+
+  function logUrl(base) {
+    return base + "?days=" + logState.days + "&user_id=" + logState.user_id
+      + "&server_id=" + logState.server_id + "&kind=" + logState.kind;
+  }
+
+  function renderLog(d) {
+    clear(content);
+
+    var days = el("select", {}, [[1, "오늘"], [7, "7일"], [30, "30일"], [90, "90일"]]
+      .map(function (x) { return el("option", { value: String(x[0]), text: x[1] }); }));
+    days.value = String(logState.days);
+    days.onchange = function () { logState.days = parseInt(this.value, 10); load(); };
+
+    var users = el("select", {}, [el("option", { value: "0", text: "모든 사람" })]
+      .concat(d.users.map(function (u) {
+        return el("option", { value: String(u.id), text: u.name });
+      })));
+    users.value = String(logState.user_id);
+    users.onchange = function () { logState.user_id = parseInt(this.value, 10); load(); };
+
+    var servers = el("select", {}, [el("option", { value: "0", text: "모든 서버" })]
+      .concat(d.servers.map(function (s) {
+        return el("option", { value: String(s.id), text: s.name });
+      })));
+    servers.value = String(logState.server_id);
+    servers.onchange = function () { logState.server_id = parseInt(this.value, 10); load(); };
+
+    var chips = el("div", { class: "chips" },
+      [["all", "전체"], ["read", "조회"], ["write", "변경"],
+       ["term", "터미널"], ["setup", "설정"]].map(function (x) {
+        var b = el("button", { type: "button", class: logState.kind === x[0] ? "on" : "",
+                               text: x[1] });
+        b.onclick = function () { logState.kind = x[0]; load(); };
+        return b;
+      }));
+
+    var csv = el("a", { class: "btn sm", href: logUrl("/api/admin/relay/log.csv") },
+                 ["CSV 로 받기"]);
+
+    content.appendChild(block("기록",
+      "누가 어디서 무엇을 했는지. 명령의 출력과 대화 본문은 넣지 않습니다. "
+      + "지우는 단추는 만들지 않았습니다.", [
+      el("div", { class: "filters" }, [days, users, servers, chips,
+        el("span", { style: "flex:1" }), csv]),
+      el("div", { class: "table-wrap" }, [
+        el("table", {}, [
+          el("thead", {}, [el("tr", {}, [
+            el("th", { scope: "col", text: "시각" }),
+            el("th", { scope: "col", text: "사람" }),
+            el("th", { scope: "col", text: "서버" }),
+            el("th", { scope: "col", text: "어디서" }),
+            el("th", { scope: "col", text: "무엇을" }),
+            el("th", { scope: "col", text: "등급" }),
+            el("th", { scope: "col", text: "끝" })
+          ])]),
+          el("tbody", {}, d.rows.length ? d.rows.map(logRow)
+            : [el("tr", {}, [el("td", { colspan: "7", class: "muted",
+                text: "이 조건에 맞는 기록이 없습니다." })])])
+        ])
+      ]),
+      el("p", { class: "desc", style: "margin-top:var(--s4)",
+        text: "비밀번호와 키는 어느 줄에도 남지 않습니다. 비밀번호를 묻는 프롬프트 "
+              + "뒤에 사람이 친 줄은 '(가려짐)' 으로 적힙니다." }),
+      el("p", { class: "desc",
+        text: "지우거나 한꺼번에 비우는 단추는 만들지 않았습니다. 기록을 손댈 수 "
+              + "있으면 기록이 아닙니다. 전송 큐(relay_jobs)의 끝난 행만 "
+              + d.keep_days + "일 뒤에 자동으로 정리됩니다." })
+    ]));
+  }
+
+  function logRow(r) {
+    var what = el("td", { class: "cmd" });
+    if (r.kind === "term") {
+      what.appendChild(document.createTextNode(r.what + " · "));
+      var more = el("button", { class: "btn sm", type: "button", text: "펼쳐 보기" });
+      more.onclick = function () { showTerm(r.ref); };
+      what.appendChild(more);
+    } else {
+      what.textContent = r.what;
+    }
+
+    var lvl = r.level === "write" ? "warn" : (r.level === "blocked" ? "bad" : "");
+    return el("tr", {}, [
+      el("td", { class: "mono", style: "font-size:12.5px", text: r.at }),
+      el("td", { text: r.who }),
+      el("td", { text: r.server || "-" }),
+      el("td", { text: r.where }),
+      what,
+      el("td", {}, [lvl ? el("span", { class: "badge " + lvl, text: r.level_label })
+                        : document.createTextNode(r.level_label)]),
+      el("td", { class: "wrap", text: r.end || r.state_label || "" })
+    ]);
+  }
+
+  function showTerm(termId) {
+    api("GET", "/api/admin/relay/log/term/" + termId).then(function (d) {
+      var box = el("div", {});
+      box.appendChild(el("p", { class: "desc",
+        text: d.term.who + " · " + d.term.server + " · " + d.term.duration
+              + " · " + d.term.opened_at + (d.term.close_reason
+                ? " · " + d.term.close_reason : "") }));
+      box.appendChild(el("div", { class: "lines",
+        text: d.lines.length
+          ? d.lines.map(function (x) {
+              return x.created_at.slice(11) + "  " + x.line;
+            }).join("\n")
+          : "엔터로 끝난 줄이 없습니다." }));
+      box.appendChild(el("p", { class: "desc", style: "margin-top:var(--s3)",
+        text: "사람이 직접 친 줄입니다. 등급을 매기지 않습니다. 그 사람의 계정 "
+              + "권한으로 한 일이기 때문입니다." }));
+      return modal({ title: "터미널에서 친 줄", node: box, confirmText: "닫기",
+                     readOnly: true });
+    }).catch(function (e) { notify(e.message, "error"); });
+  }
+
+  /* =======================================================================
+     불러오기
+     ===================================================================== */
+  function load() {
+    if (TAB === "connect") {
+      return api("GET", "/api/admin/relay/summary").then(renderConnect);
+    }
+    if (TAB === "grants") {
+      return api("GET", "/api/admin/relay/grants").then(renderGrants);
+    }
+    return api("GET", logUrl("/api/admin/relay/log")).then(renderLog);
+  }
+
+  content.appendChild(el("p", { class: "desc", text: "불러오는 중…" }));
+  load().catch(function (e) {
+    clear(content);
+    content.appendChild(el("div", { class: "alert error", text: e.message }));
+  });
+
+  /* 연결 상태는 사람이 새로고침하지 않아도 바뀐다. 이 탭에서만 다시 본다. */
+  if (TAB === "connect") {
+    setInterval(function () { load().catch(function () {}); }, 15000);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ server.name }} 터미널 · chat-bot</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+/* =========================================================================
+   웹 터미널
+
+   화면은 어두운 판 하나다. 그 색도 디자인 토큰에서 가져온다(어두운 테마의
+   --code-bg / --text). 터미널이라고 아무 검정을 쓰지 않는다.
+
+   화면을 통째로 다시 그리는 프로그램(vi, top)은 이 화면에서 제대로 보이지
+   않는다. 줄과 커서만 다루는 작은 해석기이기 때문이다. 사내망에는 CDN 이
+   없고 서드파티 JS 를 static 에 넣지 않기로 했으므로, 쓰는 명령의 99% 가
+   제대로 보이는 쪽을 택했다. 전체 화면 프로그램은 PuTTY 로 한다.
+   ========================================================================= */
+html, body { height: 100%; }
+body { overflow: hidden; }
+
+@media (min-width: 900px) {
+  body {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+.shell-main { min-width: 0; height: 100%; display: flex; flex-direction: column; }
+
+#rail-toggle {
+  flex: 0 0 auto; width: 40px; height: 40px; margin-left: -6px;
+  border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text);
+  display: grid; place-items: center; cursor: pointer;
+}
+#rail-toggle:hover { background: var(--panel2); }
+#rail-toggle svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+}
+@media (min-width: 900px) { #rail-toggle { display: none; } }
+
+/* 본문 머리. 넓은 화면에서는 상단 바가 숨겨지므로 여기가 유일한 자리다. */
+.head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+}
+.head h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+.head .spacer { flex: 1 1 auto; }
+.head .addr { font-size: 12.5px; color: var(--muted); }
+.head .back {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--muted); text-decoration: none; font-size: 13px;
+}
+.head .back:hover { color: var(--accent); }
+.head .back svg {
+  width: 16px; height: 16px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+
+#body {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column; gap: var(--s3);
+  padding: var(--s4) max(var(--s5), var(--sa-right)) calc(var(--s4) + var(--sa-bottom)) max(var(--s5), var(--sa-left));
+}
+
+/* 지금 열려 있는 터미널들 */
+#pills { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 34px; padding: 0 14px;
+  border: 0; border-radius: var(--r-pill);
+  background: var(--panel); color: var(--text);
+  box-shadow: var(--sh-card);
+  font: inherit; font-size: 13px; cursor: pointer; text-decoration: none;
+}
+.pill.on { background: var(--accent-soft); color: var(--accent-press); font-weight: 600; }
+.pill.ghost { background: transparent; box-shadow: none; color: var(--muted); }
+.pill.ghost:hover { color: var(--accent); }
+
+/* 어두운 판 */
+#screen-wrap {
+  position: relative;
+  flex: 1 1 auto; min-height: 0;
+  border-radius: var(--r-lg);
+  background: #151a1f;
+  box-shadow: var(--sh-card);
+  padding: var(--s4) var(--s4) var(--s3);
+  display: flex; flex-direction: column;
+  cursor: text;
+}
+#screen {
+  flex: 1 1 auto; min-height: 0;
+  margin: 0; overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px; line-height: 1.55;
+  color: #e7ecf0;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  tab-size: 8;
+}
+#screen .c1 { color: #f09a9a; }   /* 빨강 */
+#screen .c2 { color: #7fce9f; }   /* 초록 */
+#screen .c3 { color: #e2b36a; }   /* 노랑 */
+#screen .c4 { color: #86b2de; }   /* 파랑 */
+#screen .c5 { color: #cba6d8; }   /* 자홍 */
+#screen .c6 { color: #7fc8ce; }   /* 청록 */
+#screen .c7 { color: #e7ecf0; }
+#screen .c0 { color: #8b98a4; }   /* 흐림 */
+#screen .b  { font-weight: 600; }
+#screen .rv { background: #2f3e4b; }
+
+#caret {
+  display: inline-block; width: 7px; height: 1.05em;
+  background: #e7ecf0; vertical-align: text-bottom;
+  animation: blink 1.1s steps(2, start) infinite;
+}
+#caret.off { display: none; }
+@keyframes blink { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { #caret { animation: none; } }
+
+/* 키를 받는 자리. 보이지 않지만 화면 안에 있어야 한다. 화면 밖에 두면
+   초점이 갈 때 브라우저가 그쪽으로 스크롤한다. */
+#keys {
+  position: absolute; left: 0; bottom: 0;
+  width: 1px; height: 1px; padding: 0; border: 0;
+  opacity: 0; resize: none; overflow: hidden;
+}
+
+#statusline {
+  flex: 0 0 auto;
+  display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4);
+  padding-top: var(--s2);
+  font-size: 11.5px; line-height: 1.7; color: #8b98a4;
+}
+
+.note {
+  margin: 0;
+  padding: 11px var(--s4);
+  background: var(--panel); border-radius: var(--r);
+  box-shadow: var(--sh-card);
+  font-size: 12.5px; line-height: 1.7; color: var(--muted);
+}
+.note b { color: var(--text); font-weight: 600; }
+
+#blocked { display: none; }
+/* 좁은 화면에서는 터미널을 열지 않는다 */
+@media (max-width: 759px) {
+  #screen-wrap, #statusline, #pills { display: none !important; }
+  #blocked { display: block; }
+}
+</style>
+</head>
+<body>
+
+{% include "_rail.html" %}
+
+<div class="shell-main">
+
+<header class="top">
+  <button id="rail-toggle" type="button" aria-label="메뉴 열기" aria-controls="rail" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg>
+  </button>
+  <span class="brand">{{ server.name }}</span>
+  <span class="spacer"></span>
+</header>
+
+<div id="body">
+
+  {#
+    제목과 단추는 **본문 안**에 둔다. 넓은 화면에서는 상단 바가 숨겨진다.
+    (static/rail.css : "레일이 보이는 화면에서는 상단 바를 숨긴다")
+    상단 바에 두면 레일이 보이는 화면에서 「연결 끊기」를 누를 수 없다.
+  #}
+  <div class="head">
+    <a class="back" href="/servers">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      서버 목록
+    </a>
+    <h1>{{ server.name }}</h1>
+    <span class="addr mono">{{ server.username }}@{{ server.host }}:{{ server.port }}</span>
+    <span id="state-badge" class="badge warn">여는 중</span>
+    <span class="spacer"></span>
+    <a class="btn sm" href="/servers?chat={{ server.id }}">이 서버로 채팅</a>
+    <button class="btn sm danger" type="button" id="disconnect">연결 끊기</button>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div id="pills"></div>
+
+  <p class="note" id="blocked">
+    <b>좁은 화면에서는 터미널을 열지 않습니다.</b> 키보드가 화면 절반을 덮고 한 줄이
+    잘려 보여서, 그 상태로 명령을 치는 것이 더 위험합니다. 밖에서는
+    <a href="/servers">서버 목록</a>에서 채팅으로 물어보세요.
+  </p>
+
+  <div id="screen-wrap">
+    <pre id="screen" tabindex="0" role="log" aria-live="off" aria-label="터미널 화면"></pre>
+    <textarea id="keys" aria-label="터미널 입력" autocapitalize="off" autocomplete="off"
+              autocorrect="off" spellcheck="false"></textarea>
+    <div id="statusline">
+      <span id="st-poll">입력 0.25초마다 보냄</span>
+      <span id="st-rtt">왕복 -</span>
+      <span>붙여넣기 한 번에 {{ max_input // 1024 }}KB</span>
+      <span>이 터미널에서 친 명령은 기록된다</span>
+    </div>
+  </div>
+
+  <p class="note">
+    <b>사람이 직접 치는 명령은 등급을 매기지 않는다.</b> 브라우저가 PuTTY 를 대신할
+    뿐이고 계정 권한이 늘지 않는다. 등급과 승인 카드는 챗봇이 스스로 고른 명령에만
+    걸린다. 화면을 통째로 다시 그리는 프로그램(vi, top)은 이 화면에서 제대로 보이지
+    않는다. 그런 작업은 PuTTY 로 한다.
+  </p>
+</div>
+
+</div><!-- /.shell-main -->
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="/static/rail.js" defer></script>
+<script>
+(function () {
+  "use strict";
+  var CSRF = {{ csrf|tojson }};
+  var SERVER = {{ server|tojson }};
+  var MAX_INPUT = {{ max_input }};
+  var TERM_MAX = {{ term_max }};
+
+  function $(id) { return document.getElementById(id); }
+  function clear(n) { while (n.firstChild) { n.removeChild(n.firstChild); } }
+
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (k) {
+      if (k === "class") { n.className = props[k]; }
+      else if (k === "text") { n.textContent = props[k]; }
+      else if (k.slice(0, 2) === "on") { n[k] = props[k]; }
+      else if (props[k] !== null && props[k] !== undefined) { n.setAttribute(k, props[k]); }
+    });
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined) { return; }
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("on"); }, 3200);
+  }
+
+  function notify(msg, kind) {
+    var box = $("alerts");
+    clear(box);
+    if (!msg) { return; }
+    box.appendChild(el("div", { class: "alert " + (kind || "info"), text: msg }));
+  }
+
+  function api(method, url, body) {
+    var opt = { method: method, headers: { "X-CSRF-Token": CSRF },
+                credentials: "same-origin" };
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    return fetch(url, opt).then(function (res) {
+      return res.json().catch(function () {
+        return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+      }).then(function (data) {
+        if (!res.ok) { throw new Error((data && data.error) || ("HTTP " + res.status)); }
+        return data;
+      });
+    });
+  }
+
+  /* =======================================================================
+     아주 작은 터미널 해석기
+
+     줄 배열 + 커서(행, 열) 하나로 다룬다. 다루는 것은 이것뿐이다.
+       글자, \n, \r, \b, \t
+       CSI m(색), K/J(지우기), H/f(이동), A/B/C/D/G/d(이동), @ P(삽입/삭제)
+       OSC(제목)는 버린다. 나머지 CSI 는 조용히 버린다.
+
+     이 범위를 넘는 것(전체 화면 프로그램)은 제대로 보이지 않는다. 화면에
+     그렇게 적어 두었다. 사내망에 CDN 이 없어 xterm.js 를 쓸 수 없고,
+     서드파티 JS 를 static/ 에 넣지 않기로 했기 때문이다.
+     ===================================================================== */
+  var MAX_LINES = 2000;
+
+  function Term() {
+    this.lines = [[]];          // 각 줄은 [{ch, cls}] 배열
+    this.row = 0;
+    this.col = 0;
+    this.cls = "";
+    this.wrap = 0;              // 알려진 화면 폭 (0 이면 무제한)
+  }
+
+  Term.prototype.cur = function () {
+    while (this.lines.length <= this.row) { this.lines.push([]); }
+    return this.lines[this.row];
+  };
+
+  Term.prototype.put = function (ch) {
+    var line = this.cur();
+    while (line.length < this.col) { line.push({ ch: " ", cls: "" }); }
+    line[this.col] = { ch: ch, cls: this.cls };
+    this.col += 1;
+  };
+
+  Term.prototype.newline = function () {
+    this.row += 1;
+    while (this.lines.length <= this.row) { this.lines.push([]); }
+    if (this.lines.length > MAX_LINES) {
+      var drop = this.lines.length - MAX_LINES;
+      this.lines.splice(0, drop);
+      this.row -= drop;
+    }
+  };
+
+  Term.prototype.sgr = function (params) {
+    var self = this;
+    if (!params.length) { params = [0]; }
+    params.forEach(function (p) {
+      if (p === 0) { self.cls = ""; }
+      else if (p === 1) { self.cls = (self.cls + " b").trim(); }
+      else if (p === 7) { self.cls = (self.cls + " rv").trim(); }
+      else if (p === 2 || p === 90) { self.cls = "c0"; }
+      else if (p >= 30 && p <= 37) { self.cls = keepBold(self.cls, "c" + (p - 30)); }
+      else if (p >= 91 && p <= 97) { self.cls = keepBold(self.cls, "c" + (p - 90)); }
+      else if (p === 39) { self.cls = keepBold(self.cls, ""); }
+    });
+  };
+
+  function keepBold(cls, color) {
+    var bold = cls.indexOf("b") >= 0 && /\bb\b/.test(cls);
+    return (color + (bold ? " b" : "")).trim();
+  }
+
+  Term.prototype.eraseLine = function (mode) {
+    var line = this.cur();
+    if (mode === 1) {
+      for (var i = 0; i < this.col && i < line.length; i++) { line[i] = { ch: " ", cls: "" }; }
+    } else if (mode === 2) {
+      line.length = 0;
+    } else {
+      line.length = Math.min(line.length, this.col);
+    }
+  };
+
+  Term.prototype.eraseScreen = function (mode) {
+    if (mode === 2 || mode === 3) {
+      this.lines = [[]];
+      this.row = 0; this.col = 0;
+      return;
+    }
+    if (mode === 0) {
+      this.eraseLine(0);
+      this.lines.length = this.row + 1;
+    }
+  };
+
+  Term.prototype.feed = function (text) {
+    var i = 0, n = text.length;
+    while (i < n) {
+      var ch = text[i];
+
+      if (ch === "\x1b") {
+        var rest = text.slice(i);
+        var m;
+        /* OSC : ESC ] ... BEL | ESC \  (창 제목 등) */
+        m = /^\x1b\][^\x07\x1b]*(\x07|\x1b\\)/.exec(rest);
+        if (m) { i += m[0].length; continue; }
+        /* CSI */
+        m = /^\x1b\[([0-9;?]*)([@-~])/.exec(rest);
+        if (m) {
+          this.csi(m[1], m[2]);
+          i += m[0].length;
+          continue;
+        }
+        /* ESC ( B, ESC =, ESC > 같은 두세 글자 */
+        m = /^\x1b[()][\x20-\x7e]/.exec(rest);
+        if (m) { i += m[0].length; continue; }
+        m = /^\x1b[=><78MD]/.exec(rest);
+        if (m) {
+          if (m[0] === "\x1bM") { this.row = Math.max(0, this.row - 1); }
+          i += m[0].length;
+          continue;
+        }
+        i += 1;             // 알 수 없는 ESC. 버린다
+        continue;
+      }
+
+      if (ch === "\n") {
+        /* 줄바꿈은 **다음 줄 맨 앞**으로 간다.
+         *
+         * 진짜 터미널에서 LF 는 "한 줄 아래" 일 뿐이고 맨 앞으로 되돌리는 것은
+         * CR 이다. 보통은 커널(ONLCR)이 둘을 함께 보내 준다. 그런데 그 변환을
+         * 거치지 않은 출력이 섞이면 줄이 계단처럼 밀려 내려가서 읽을 수 없는
+         * 화면이 된다. 전체 화면 프로그램을 그리려는 해석기가 아니므로
+         * 읽히는 쪽을 택한다. */
+        this.newline();
+        this.col = 0;
+        i += 1;
+        continue;
+      }
+      if (ch === "\r") { this.col = 0; i += 1; continue; }
+      if (ch === "\b") { this.col = Math.max(0, this.col - 1); i += 1; continue; }
+      if (ch === "\t") {
+        var stop = 8 - (this.col % 8);
+        for (var t = 0; t < stop; t++) { this.put(" "); }
+        i += 1; continue;
+      }
+      if (ch === "\x07") { i += 1; continue; }        // 벨은 울리지 않는다
+      if (ch < " " && ch !== "\x1b") { i += 1; continue; }
+
+      this.put(ch);
+      i += 1;
+    }
+  };
+
+  Term.prototype.csi = function (raw, fin) {
+    var params = raw.replace("?", "").split(";")
+      .filter(function (x) { return x !== ""; })
+      .map(function (x) { return parseInt(x, 10) || 0; });
+    var p1 = params.length ? params[0] : 0;
+
+    switch (fin) {
+      case "m": this.sgr(params); break;
+      case "K": this.eraseLine(p1); break;
+      case "J": this.eraseScreen(p1); break;
+      case "H": case "f":
+        /* 절대 이동. 스크롤이 있는 화면에서는 "지금 화면의 위" 를 알 수 없으므로
+           행은 마지막 줄 기준으로 본다. 전체 화면 프로그램을 제대로 그리려는
+           것이 아니라 clear 뒤의 좌상단 이동 정도를 맞추기 위한 것이다. */
+        this.col = Math.max(0, (params[1] || 1) - 1);
+        break;
+      case "A": this.row = Math.max(0, this.row - (p1 || 1)); break;
+      case "B": this.row = this.row + (p1 || 1); break;
+      case "C": this.col = this.col + (p1 || 1); break;
+      case "D": this.col = Math.max(0, this.col - (p1 || 1)); break;
+      case "G": this.col = Math.max(0, (p1 || 1) - 1); break;
+      case "P": {                                   // 글자 삭제
+        var line = this.cur();
+        line.splice(this.col, p1 || 1);
+        break;
+      }
+      case "@": {                                   // 글자 삽입
+        var ln = this.cur();
+        for (var k = 0; k < (p1 || 1); k++) { ln.splice(this.col, 0, { ch: " ", cls: "" }); }
+        break;
+      }
+      default: break;                               // 나머지는 버린다
+    }
+  };
+
+  /* 줄 배열을 DOM 으로. 같은 색이 이어지는 동안은 한 span 에 몰아 넣는다. */
+  Term.prototype.render = function (target, caret) {
+    clear(target);
+    var frag = document.createDocumentFragment();
+    for (var r = 0; r < this.lines.length; r++) {
+      var line = this.lines[r];
+      var buf = "", cls = null;
+      for (var c = 0; c < line.length; c++) {
+        var cell = line[c];
+        if (cls === null) { cls = cell.cls; }
+        if (cell.cls !== cls) {
+          frag.appendChild(cls ? el("span", { class: cls, text: buf })
+                               : document.createTextNode(buf));
+          buf = ""; cls = cell.cls;
+        }
+        buf += cell.ch;
+      }
+      if (buf) {
+        frag.appendChild(cls ? el("span", { class: cls, text: buf })
+                             : document.createTextNode(buf));
+      }
+      if (r === this.lines.length - 1 && caret) { frag.appendChild(caret); }
+      if (r < this.lines.length - 1) { frag.appendChild(document.createTextNode("\n")); }
+    }
+    target.appendChild(frag);
+  };
+
+  /* =======================================================================
+     세션
+     ===================================================================== */
+  var term = new Term();
+  var caret = el("span", { id: "caret", "aria-hidden": "true" });
+  var screen = $("screen");
+  var state = { termId: null, seq: 0, closed: false, sending: false,
+                outbuf: "", timer: null, poll: null, rtt: null, silence: null };
+
+  function paint() {
+    var atBottom = screen.scrollTop + screen.clientHeight >= screen.scrollHeight - 24;
+    term.render(screen, state.closed ? null : caret);
+    if (atBottom) { screen.scrollTop = screen.scrollHeight; }
+  }
+
+  function setBadge(text, kind) {
+    var b = $("state-badge");
+    b.className = "badge " + kind;
+    b.textContent = text;
+  }
+
+  function open() {
+    setBadge("여는 중", "warn");
+    term.feed("\x1b[0m" + SERVER.username + "@" + SERVER.host + " 에 붙는 중…\r\n");
+    paint();
+    api("POST", "/api/term", { server_id: SERVER.id, cols: cols(), rows: 30 })
+      .then(function (d) {
+        state.termId = d.term_id;
+        startPolling();
+        loadPills();
+      }).catch(function (e) {
+        setBadge("열지 못함", "bad");
+        notify(e.message, "error");
+        term.feed("\r\n\x1b[31m" + e.message + "\x1b[0m\r\n");
+        paint();
+      });
+  }
+
+  function cols() {
+    /* 글자 폭을 재서 서버에 알려 준다. ssh 쪽 줄바꿈 위치가 맞아야
+       긴 명령을 지울 때 화면이 어긋나지 않는다. */
+    var probe = el("span", { text: "0123456789" , style: "position:absolute;visibility:hidden"});
+    screen.appendChild(probe);
+    var w = probe.getBoundingClientRect().width / 10;
+    screen.removeChild(probe);
+    if (!w) { return 120; }
+    return Math.max(60, Math.min(200, Math.floor(screen.clientWidth / w) - 1));
+  }
+
+  function startPolling() {
+    stopPolling();
+    state.poll = setInterval(tick, 250);
+    tick();
+  }
+
+  function stopPolling() {
+    if (state.poll) { clearInterval(state.poll); state.poll = null; }
+  }
+
+  function tick() {
+    if (!state.termId || state.closed) { return; }
+    var t0 = Date.now();
+    fetch("/api/term/" + state.termId + "/io?seq=" + state.seq,
+          { credentials: "same-origin" })
+      .then(function (res) { return res.json(); })
+      .then(function (d) {
+        state.rtt = Date.now() - t0;
+        $("st-rtt").textContent = "왕복 " + (state.rtt / 1000).toFixed(2) + "초";
+        if (!d.ok) { return; }
+        if (d.dropped) {
+          term.feed("\r\n\x1b[33m(화면 앞부분이 버퍼에서 밀려났습니다)\x1b[0m\r\n");
+        }
+        if (d.data) { term.feed(d.data); }
+        state.seq = d.seq;
+        if (d.state === "open") { setBadge("열림", "ok"); }
+        if (d.silence !== null && d.silence !== undefined && d.silence > 12
+            && d.state !== "closed") {
+          notify(Math.round(d.silence) + "초 동안 중계와 통신이 없었습니다. " +
+                 "VDI 의 중계 프로그램이나 네트워크를 확인하세요.", "warn");
+        } else if (d.state === "open") {
+          notify("", "info");
+        }
+        if (d.state === "closed" || d.state === "failed") { onClosed(d.reason); }
+        paint();
+      })
+      .catch(function () { /* 한 번 실패는 넘긴다. 다음 0.25초에 다시 묻는다 */ });
+  }
+
+  function onClosed(reason) {
+    if (state.closed) { return; }
+    state.closed = true;
+    stopPolling();
+    setBadge("닫힘", "bad");
+    term.feed("\r\n\x1b[33m" + (reason || "연결이 끊어졌습니다") + "\x1b[0m\r\n");
+    paint();
+    var box = $("alerts");
+    clear(box);
+    box.appendChild(el("div", { class: "alert warn" }, [
+      (reason || "연결이 끊어졌습니다") + " ",
+      el("button", { class: "btn sm", type: "button", style: "margin-left:8px",
+        onclick: function () { location.reload(); } }, ["다시 열기"])
+    ]));
+    loadPills();
+  }
+
+  /* --------------------------------------------------------------- 입력 */
+  function send(data) {
+    if (!state.termId || state.closed) { return; }
+    state.outbuf += data;
+    if (state.outbuf.length > MAX_INPUT) {
+      state.outbuf = state.outbuf.slice(0, MAX_INPUT);
+      toast("한 번에 보낼 수 있는 양을 넘었습니다. 나눠서 보내세요.");
+    }
+    if (state.timer) { return; }
+    /* 키를 누를 때마다 한 번씩 보내면 요청이 과하다. 40ms 동안 모았다 보낸다.
+       사람이 느끼기에는 즉시다. */
+    state.timer = setTimeout(flush, 40);
+  }
+
+  function flush() {
+    state.timer = null;
+    if (!state.outbuf || !state.termId || state.closed) { return; }
+    var data = state.outbuf;
+    state.outbuf = "";
+    api("POST", "/api/term/" + state.termId + "/io", { data: data })
+      .catch(function (e) { toast(e.message); });
+  }
+
+  var CTRL = { "a": "\x01", "b": "\x02", "c": "\x03", "d": "\x04", "e": "\x05",
+               "f": "\x06", "g": "\x07", "h": "\x08", "k": "\x0b", "l": "\x0c",
+               "n": "\x0e", "p": "\x10", "r": "\x12", "u": "\x15", "w": "\x17",
+               "y": "\x19", "z": "\x1a", "[": "\x1b" };
+
+  var SPECIAL = {
+    "Enter": "\r", "Backspace": "\x7f", "Tab": "\t", "Escape": "\x1b",
+    "ArrowUp": "\x1b[A", "ArrowDown": "\x1b[B", "ArrowRight": "\x1b[C",
+    "ArrowLeft": "\x1b[D", "Home": "\x1b[H", "End": "\x1b[F",
+    "Delete": "\x1b[3~", "PageUp": "\x1b[5~", "PageDown": "\x1b[6~",
+    "Insert": "\x1b[2~"
+  };
+
+  var keys = $("keys");
+
+  $("screen-wrap").onclick = function () { keys.focus(); };
+  screen.onfocus = function () { keys.focus(); };
+
+  keys.addEventListener("keydown", function (e) {
+    if (state.closed) { return; }
+    if (e.isComposing) { return; }                 // 한글 조합 중
+    if (e.ctrlKey && !e.altKey && !e.metaKey) {
+      var k = e.key.toLowerCase();
+      if (k === "v" || k === "c") { return; }       // 붙여넣기/복사는 브라우저에 맡긴다
+      if (CTRL[k]) { send(CTRL[k]); e.preventDefault(); return; }
+    }
+    if (SPECIAL[e.key]) { send(SPECIAL[e.key]); e.preventDefault(); return; }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      send(e.key);
+      e.preventDefault();
+    }
+  });
+
+  /* 한글은 조합이 끝난 뒤에 한 번에 보낸다 */
+  keys.addEventListener("compositionend", function (e) {
+    if (e.data) { send(e.data); }
+    keys.value = "";
+  });
+  keys.addEventListener("input", function () {
+    if (keys.value) {
+      /* IME 가 compositionend 를 주지 않는 경우의 보험 */
+      send(keys.value);
+      keys.value = "";
+    }
+  });
+
+  keys.addEventListener("paste", function (e) {
+    e.preventDefault();
+    var text = (e.clipboardData || window.clipboardData).getData("text") || "";
+    if (!text) { return; }
+    var bytes = new Blob([text]).size;
+    if (bytes > MAX_INPUT) {
+      toast("붙여넣기가 " + Math.round(bytes / 1024) + "KB 입니다. 한 번에 " +
+            Math.round(MAX_INPUT / 1024) + "KB 까지만 보냅니다.");
+      text = text.slice(0, MAX_INPUT);
+    }
+    send(text.replace(/\r\n/g, "\r"));
+  });
+
+  /* --------------------------------------------------------- 세션 알약 */
+  function loadPills() {
+    api("GET", "/api/term").then(function (d) {
+      var box = $("pills");
+      clear(box);
+      d.terminals.forEach(function (t) {
+        var here = t.term_id === state.termId;
+        box.appendChild(el(here ? "span" : "a", {
+          class: "pill" + (here ? " on" : ""),
+          href: here ? null : "/servers/" + t.server_id + "/terminal"
+        }, [el("span", { class: "dot", "aria-hidden": "true" }), t.server_name]));
+      });
+      box.appendChild(el("a", { class: "pill ghost", href: "/servers" }, ["다른 서버 열기"]));
+      box.appendChild(el("span", { class: "pill ghost",
+        text: "동시에 " + TERM_MAX + "개까지 열 수 있다 (지금 " +
+              d.terminals.length + "개)" }));
+    }).catch(function () {});
+  }
+
+  /* ------------------------------------------------------------- 끊기 */
+  $("disconnect").onclick = function () {
+    if (!state.termId) { location.href = "/servers"; return; }
+    api("POST", "/api/term/" + state.termId + "/close").then(function () {
+      onClosed("연결을 끊었습니다");
+    }).catch(function (e) { toast(e.message); });
+  };
+
+  /* 창을 닫으면 터미널도 닫는다. 유령 ssh 가 쌓이면 다음 사람이 붙지 못한다.
+     (못 보냈더라도 서버의 청소 스레드가 조용한 터미널을 닫는다) */
+  window.addEventListener("pagehide", function () {
+    if (!state.termId || state.closed) { return; }
+    try {
+      /* sendBeacon 은 헤더를 붙일 수 없다. CSRF 토큰을 form 값으로 보낸다.
+         (check_csrf 가 헤더와 form 양쪽을 본다) */
+      var fd = new FormData();
+      fd.append("_csrf", CSRF);
+      navigator.sendBeacon("/api/term/" + state.termId + "/close", fd);
+    } catch (err) { /* 보낼 수 없으면 서버 쪽 타이머에 맡긴다 */ }
+  });
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden || state.closed) { return; }
+    tick();
+  });
+
+  /* ------------------------------------------------------------- 시작 */
+  if (window.matchMedia("(max-width: 759px)").matches) {
+    notify("좁은 화면에서는 터미널을 열지 않습니다.", "warn");
+  } else {
+    open();
+    keys.focus();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,10 +1,11 @@
 {#
   왼쪽 고정 내비게이션 레일.
-  채팅 / 메모 / 패치 / 관리자 화면이 함께 넣는다. 모양은 static/rail.css 에 있다.
+  채팅 / 메모 / 패치 / 서버 / 관리자 화면이 함께 넣는다. 모양은 static/rail.css 에 있다.
 
   받는 값
-    rail      : 지금 화면 키 ('chat' | 'notes' | 'patch' | 'dashboard' | 'users'
-                | 'claude' | 'storage' | 'system' | 'patch_admin')
+    rail      : 지금 화면 키 ('chat' | 'notes' | 'patch' | 'servers'
+                | 'dashboard' | 'users' | 'claude' | 'storage' | 'system'
+                | 'patch_admin' | 'relay')
     me        : auth.public_user() 결과
     is_admin  : 관리자 여부. 운영 묶음을 서버에서 아예 그리지 않는다.
     menus     : 그 사람이 받은 메뉴 키 목록 (permissions.user_menus 결과).
@@ -53,6 +54,14 @@
       <span>패치</span>
     </a>
     {% endif %}
+
+    {% if 'servers' in menu_keys %}
+    <a class="rail-link{{ ' on' if rail == 'servers' }}" href="/servers"
+       {% if rail == 'servers' %}aria-current="page"{% endif %}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01"/><path d="M7 16.5h.01"/></svg>
+      <span>서버</span>
+    </a>
+    {% endif %}
   </div>
   {% endif %}
 
@@ -76,6 +85,12 @@
        {% if rail == 'patch_admin' %}aria-current="page"{% endif %}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5"/></svg>
       <span>패치 설정</span>
+    </a>
+
+    <a class="rail-link{{ ' on' if rail == 'relay' }}" href="/admin/relay"
+       {% if rail == 'relay' %}aria-current="page"{% endif %}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01"/><path d="M7 16.5h.01"/></svg>
+      <span>중계 설정</span>
     </a>
 
     <a class="rail-link{{ ' on' if rail == 'claude' }}" href="/admin/claude"

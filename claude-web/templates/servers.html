@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>서버 · chat-bot</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d2328" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/type.css">
+<link rel="stylesheet" href="/static/rail.css">
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+/* =========================================================================
+   서버 화면
+   넓은 화면 : [레일 220 | 표]
+   좁은 화면 : 1단. 표 대신 카드이고 터미널은 열지 않는다.
+
+   한 화면에 두 갈래가 함께 있다. 「채팅」은 말로 묻고 Claude 가 명령을 골라
+   확인한다. 「터미널」은 내가 직접 친다. 같은 서버에 둘 다 열어 둘 수 있다.
+   ========================================================================= */
+html, body { height: 100%; }
+body { overflow: hidden; }
+
+@media (min-width: 900px) {
+  body {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+.shell-main { min-width: 0; height: 100%; display: flex; flex-direction: column; }
+
+#rail-toggle {
+  flex: 0 0 auto;
+  width: 40px; height: 40px;
+  margin-left: -6px;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text);
+  display: grid; place-items: center; cursor: pointer;
+}
+#rail-toggle:hover { background: var(--panel2); }
+#rail-toggle svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+}
+@media (min-width: 900px) { #rail-toggle { display: none; } }
+
+#scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#alerts:not(:empty) { padding: var(--s3) var(--s5) 0; }
+
+/* 본문 머리. 패치 화면의 .head 와 같은 모양을 쓴다. 운영 화면끼리 제목이
+   다른 자리에 있으면 매번 눈이 찾아다닌다. */
+.head {
+  display: flex; align-items: center; gap: var(--s3);
+  flex-wrap: wrap; margin-bottom: var(--s4);
+}
+.head h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+.head .spacer { flex: 1 1 auto; }
+.head .when { font-size: 12.5px; color: var(--muted); }
+
+/* 표 : 마지막 칸(어떻게 쓸지)은 줄바꿈 없이 단추 두 개 */
+td .acts { display: flex; gap: var(--s1); align-items: center; }
+td.wide { white-space: normal; max-width: 280px; }
+.srv-name { font-weight: 600; }
+.srv-desc { font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.addr { font-size: 13px; }
+
+#cards { display: none; padding: 0 var(--s4) var(--s5); }
+#table-wrap { display: block; }
+@media (max-width: 759px) {
+  #cards { display: grid; gap: var(--s3); }
+  #table-wrap { display: none; }
+  main.page { padding-left: var(--s4); padding-right: var(--s4); }
+}
+
+.srv-card {
+  background: var(--panel);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  padding: var(--s4) var(--s5);
+}
+.srv-card .line { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s1); }
+.srv-card .acts { display: flex; gap: var(--s2); margin-top: var(--s3); }
+.srv-card .acts .btn { flex: 1 1 0; }
+.srv-card .acts .btn.narrow { flex: 0 0 96px; }
+
+/* 안내 조각. 선으로 가르지 않고 흰 판으로 띄운다 */
+.note {
+  margin: 0 0 var(--s3);
+  padding: 13px var(--s5);
+  background: var(--panel);
+  border-radius: var(--r);
+  box-shadow: var(--sh-card);
+  font-size: 13px; line-height: 1.75; color: var(--muted);
+}
+.note b { color: var(--text); font-weight: 600; }
+
+/* 모달 : shared.css 의 .modal 을 넓게 쓴다 */
+.modal.wide { max-width: 520px; width: min(520px, calc(100vw - 32px)); }
+.modal .grid2 { display: grid; grid-template-columns: 1fr 120px; gap: 0 var(--s3); }
+.modal .field { margin-bottom: var(--s3); }
+.modal .actions { margin-top: var(--s5); }
+.modal h3 .sub { display: block; margin-top: 4px; font-size: 13px; font-weight: 400; color: var(--muted); }
+
+/* 이어서 쓸 대화 목록 */
+.pick {
+  width: 100%;
+  display: flex; align-items: center; gap: var(--s2);
+  min-height: var(--tap);
+  padding: var(--s2) var(--s3);
+  margin-bottom: var(--s1);
+  border: 0; border-radius: var(--r-sm);
+  background: var(--panel2); color: var(--text);
+  font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+.pick:hover { background: var(--accent-soft); }
+.pick .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick .when { flex: 0 0 auto; font-size: 12px; color: var(--muted); }
+.pick.other { background: var(--warn-bg); }
+.pick.other:hover { background: var(--warn-bg); outline: 2px solid var(--warn-fg); }
+
+.checkline { display: flex; align-items: center; gap: var(--s2); font-size: 13.5px; margin: var(--s3) 0 0; }
+.checkline input { width: 18px; height: 18px; }
+
+/* 내 중계. 사람마다 자기 VDI 에 깔아야 하므로 이 칸이 서버 목록보다 먼저다.
+   붙어 있으면 한 줄로 접히고, 안 붙어 있으면 할 일을 펼쳐 보여 준다. */
+#myrelay {
+  margin: 0 0 var(--s4);
+  padding: var(--s4) var(--s5);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--sh-card);
+}
+#myrelay .line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
+#myrelay h2 { margin: 0; font-size: 15px; font-weight: 600; }
+#myrelay .spacer { flex: 1 1 auto; }
+#myrelay .why { margin: var(--s3) 0 0; font-size: 13px; line-height: 1.75; color: var(--muted); }
+#myrelay .why b { color: var(--text); font-weight: 600; }
+#myrelay ol { margin: var(--s3) 0 0; padding-left: 1.2em; font-size: 13.5px; line-height: 2; }
+#myrelay .hash { font-size: 11.5px; color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+/* VDI 에 그대로 적어 넣을 두 줄 */
+.handout {
+  margin: var(--s3) 0 0;
+  padding: var(--s4) var(--s5);
+  border-radius: var(--r-sm);
+  background: #151a1f; color: #e7ecf0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px; line-height: 1.9;
+  overflow-x: auto;
+}
+.handout .k { color: #8b98a4; }
+.code-big {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 28px; font-weight: 600; letter-spacing: .14em;
+  font-variant-numeric: tabular-nums;
+}
+
+#test-box:empty { display: none; }
+#test-box { margin-top: var(--s3); }
+</style>
+</head>
+<body>
+
+{% include "_rail.html" %}
+
+<div class="shell-main">
+
+<header class="top">
+  <button id="rail-toggle" type="button" aria-label="메뉴 열기" aria-controls="rail" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg>
+  </button>
+  <span class="brand">서버</span>
+  <span class="spacer"></span>
+</header>
+
+<div id="scroll">
+  <div id="alerts"></div>
+  <main class="page">
+
+    {#
+      제목과 단추는 **본문 안**에 둔다. 넓은 화면에서는 상단 바가 숨겨진다.
+      (static/rail.css : "레일이 보이는 화면에서는 상단 바를 숨긴다")
+      상단 바에 두면 레일이 보이는 화면에서 「서버 추가」를 누를 수 없다.
+    #}
+    <div class="head">
+      <h1>서버</h1>
+      <span id="relay-badge" class="badge">확인 중</span>
+      <span class="spacer"></span>
+      <span id="term-count" class="when"></span>
+      <button class="btn sm" type="button" id="refresh">새로고침</button>
+      {% if is_admin %}
+      <button class="btn sm primary" type="button" id="add-server">서버 추가</button>
+      {% endif %}
+    </div>
+
+    <section id="myrelay" aria-label="내 중계"></section>
+
+    <p class="note" id="lead">
+      <b>마지막 확인</b>은 그 서버에 마지막으로 성공한 접속 시각이다. 지금 붙는지
+      보려면 <b>연결 테스트</b>를 누른다. 목록에 있다는 것과 지금 붙는다는 것은
+      다른 이야기다.
+    </p>
+
+    <div class="table-wrap" id="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">이름</th>
+            <th scope="col">주소</th>
+            <th scope="col">계정</th>
+            <th scope="col">인증</th>
+            <th scope="col">마지막 확인</th>
+            <th scope="col">상태</th>
+            <th scope="col">어떻게 쓸지</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div id="cards"></div>
+
+    <p class="note" style="margin-top:var(--s4)">
+      <b>채팅</b>은 말로 묻고 Claude 가 명령을 골라 확인한다. <b>터미널</b>은 내가
+      직접 친다. 같은 서버에 둘 다 열어 둘 수 있다.
+    </p>
+    <p class="note" id="term-note"></p>
+    <p class="note" id="mobile-note" hidden>
+      좁은 화면에서는 터미널을 열지 않는다. 키보드가 화면 절반을 덮고 한 줄이
+      잘려 보여서, 그 상태로 명령을 치는 것이 더 위험하다. 밖에서는 채팅으로 묻는다.
+    </p>
+
+  </main>
+</div>
+
+</div><!-- /.shell-main -->
+
+<!-- 서버 추가 / 수정 -->
+<div class="overlay" id="server-overlay" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="server-title">
+    <h3 id="server-title">서버 추가<span class="sub" id="server-sub">접속 정보는 암호화해서 저장한다. 저장한 뒤로는 다시 보여 주지 않는다.</span></h3>
+
+    <div class="grid2">
+      <div class="field">
+        <label for="f-name">이름</label>
+        <input type="text" id="f-name" placeholder="nfs-181" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="f-port">포트</label>
+        <input type="number" id="f-port" value="22" min="1" max="65535">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="f-host">주소</label>
+      <input type="text" id="f-host" class="mono" placeholder="10.20.30.181" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label for="f-user">계정</label>
+      <input type="text" id="f-user" class="mono" placeholder="svc_ops" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label for="f-auth">인증</label>
+      <select id="f-auth">
+        <option value="key">키</option>
+        <option value="password">비밀번호</option>
+      </select>
+      <div class="help" id="auth-help"></div>
+    </div>
+
+    <div class="field" id="key-field">
+      <label for="f-key">쓸 키 이름</label>
+      <input type="text" id="f-key" class="mono" placeholder="ops-vdi-01" autocomplete="off">
+      <div class="help">중계 PC 에 있는 키 파일 이름이다. 키 내용은 챗봇 서버에 두지 않는다.</div>
+    </div>
+
+    <div class="field" id="pw-field" hidden>
+      <label for="f-pw">비밀번호</label>
+      <input type="password" id="f-pw" autocomplete="new-password" placeholder="">
+      <div class="help" id="pw-help">저장한 뒤로는 다시 보여 주지 않는다. 미리보기만 남는다. 비워서 저장하면 기존 값이 유지된다.</div>
+    </div>
+
+    <div class="field">
+      <label for="f-desc">설명</label>
+      <input type="text" id="f-desc" placeholder="NFS 1차. /data 마운트." autocomplete="off">
+    </div>
+
+    <div class="checkline" id="enable-line" hidden>
+      <input type="checkbox" id="f-enabled" checked>
+      <label for="f-enabled" style="margin:0">목록에서 쓸 수 있게 둔다</label>
+    </div>
+
+    <div id="test-box"></div>
+
+    <div class="actions">
+      <button class="btn" type="button" id="btn-test">연결 테스트</button>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn" type="button" id="btn-cancel">취소</button>
+      <button class="btn primary" type="button" id="btn-save" disabled>저장</button>
+    </div>
+    <div class="help" id="save-help">연결 테스트가 성공해야 저장이 눌린다.</div>
+  </div>
+</div>
+
+<!-- 채팅 열기 -->
+<div class="overlay" id="chat-overlay" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="chat-title">
+    <h3 id="chat-title">서버로 물어보기<span class="sub">대화 하나에는 서버 하나가 붙는다.</span></h3>
+
+    <button class="btn primary block" type="button" id="chat-new" style="min-height:var(--tap)">
+      새 대화 시작
+    </button>
+    <div class="checkline">
+      <input type="checkbox" id="chat-private" checked>
+      <label for="chat-private" style="margin:0">비공개로 시작 (서버를 붙인 대화는 공개로 바꿀 수 없다)</label>
+    </div>
+
+    <div id="chat-list" style="margin-top:var(--s5)"></div>
+
+    <p class="help" style="margin-top:var(--s4)">
+      서버는 대화 안에서 언제든 바꿀 수 있다. 바꾸면 그 다음 질문부터 적용되고,
+      이미 받은 답은 어느 서버에서 나온 것인지 그대로 남는다.
+    </p>
+
+    <div class="actions">
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn" type="button" id="chat-cancel">취소</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="ask-overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ask-title">
+    <h3 id="ask-title"></h3>
+    <p id="ask-msg"></p>
+    <div class="actions">
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn" type="button" id="ask-no">취소</button>
+      <button class="btn danger" type="button" id="ask-yes">확인</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="/static/rail.js" defer></script>
+<script>
+(function () {
+  "use strict";
+  var CSRF = {{ csrf|tojson }};
+  var CAN_MANAGE = {{ 'true' if is_admin else 'false' }};
+  var HAS_CHAT = {{ 'true' if has_chat else 'false' }};
+  var TERM_MAX = {{ term_max }};
+
+  var state = { servers: [], relay: null, level: "off", editing: null,
+                tested: false, termOpen: 0, picking: null };
+
+  function $(id) { return document.getElementById(id); }
+  function clear(n) { while (n.firstChild) { n.removeChild(n.firstChild); } }
+
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (k) {
+      if (k === "class") { n.className = props[k]; }
+      else if (k === "text") { n.textContent = props[k]; }
+      else if (k.slice(0, 2) === "on") { n[k] = props[k]; }
+      else if (props[k] !== null && props[k] !== undefined) { n.setAttribute(k, props[k]); }
+    });
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined) { return; }
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("on"); }, 3200);
+  }
+
+  function notify(msg, kind) {
+    var box = $("alerts");
+    clear(box);
+    if (!msg) { return; }
+    box.appendChild(el("div", { class: "alert " + (kind || "info"), text: msg }));
+  }
+
+  function api(method, url, body) {
+    var opt = { method: method, headers: { "X-CSRF-Token": CSRF },
+                credentials: "same-origin" };
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    return fetch(url, opt).then(function (res) {
+      return res.json().catch(function () {
+        return { ok: false, error: "서버 응답 해석 실패 (HTTP " + res.status + ")" };
+      }).then(function (data) {
+        if (!res.ok) { throw new Error((data && data.error) || ("HTTP " + res.status)); }
+        return data;
+      });
+    });
+  }
+
+  function ask(opts) {
+    return new Promise(function (resolve) {
+      $("ask-title").textContent = opts.title || "확인";
+      $("ask-msg").textContent = opts.message || "";
+      var yes = $("ask-yes");
+      yes.textContent = opts.confirmText || "확인";
+      yes.className = "btn " + (opts.danger ? "danger" : "primary");
+      $("ask-overlay").hidden = false;
+      function done(v) { $("ask-overlay").hidden = true; resolve(v); }
+      yes.onclick = function () { done(true); };
+      $("ask-no").onclick = function () { done(false); };
+    });
+  }
+
+  function ago(stamp) {
+    if (!stamp) { return "없음"; }
+    var t = Date.parse(stamp.replace(" ", "T"));
+    if (isNaN(t)) { return stamp; }
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) { return "방금 전"; }
+    if (s < 3600) { return Math.round(s / 60) + "분 전"; }
+    if (s < 86400) { return Math.round(s / 3600) + "시간 전"; }
+    return stamp.slice(5, 16);
+  }
+
+  function narrow() { return window.matchMedia("(max-width: 759px)").matches; }
+
+  /* --------------------------------------------------------- 상태 배지 */
+  function stateBadge(s) {
+    if (!s.is_enabled) { return el("span", { class: "badge", text: "꺼짐" }); }
+    if (s.last_check_ok === true) {
+      return el("span", { class: "badge ok" }, [
+        el("span", { class: "dot", "aria-hidden": "true" }), "연결됨"]);
+    }
+    if (s.last_check_ok === false) {
+      return el("span", { class: "badge bad", text: "실패" });
+    }
+    return el("span", { class: "badge warn", text: "확인 필요" });
+  }
+
+  /* 왜 터미널을 못 누르는지. 누를 수 없는 단추에는 이유가 붙어 있어야 한다. */
+  function termBlockedReason(s) {
+    if (!state.relay || !state.relay.connected) { return "중계가 붙어 있지 않다"; }
+    if (!s.is_enabled) { return "꺼 둔 서버다"; }
+    if (s.last_check_ok === false) { return "마지막 접속이 실패했다. 연결 테스트부터"; }
+    if (narrow()) { return "좁은 화면에서는 열지 않는다"; }
+    if (state.termOpen >= TERM_MAX && !(s.terminals || []).length) {
+      return "열 수 있는 터미널 " + TERM_MAX + "개를 다 썼다";
+    }
+    return "";
+  }
+
+  function chatBlockedReason(s) {
+    if (!HAS_CHAT) { return "채팅 메뉴를 받지 않았다. 관리자에게 요청하세요."; }
+    if (!s.is_enabled) { return "꺼 둔 서버다"; }
+    return "";
+  }
+
+  function actionButtons(s, big) {
+    var out = [];
+    var chatWhy = chatBlockedReason(s);
+    var chat = el("button", {
+      class: "btn sm primary" + (big ? "" : ""), type: "button",
+      title: chatWhy || "말로 묻는다. Claude 가 명령을 골라 확인한다.",
+      onclick: function () { openChatDialog(s); }
+    }, ["채팅"]);
+    if (chatWhy) { chat.disabled = true; }
+    out.push(chat);
+
+    var termWhy = termBlockedReason(s);
+    var opened = (s.terminals || [])[0];
+    var term = el("button", {
+      class: "btn sm" + (big ? " narrow" : ""), type: "button",
+      title: termWhy || "내가 직접 친다.",
+      onclick: function () { location.href = "/servers/" + s.id + "/terminal"; }
+    }, [opened ? "터미널 (열림)" : "터미널"]);
+    if (termWhy) { term.disabled = true; }
+    out.push(term);
+
+    if (CAN_MANAGE && !big) {
+      out.push(el("button", { class: "btn sm", type: "button", title: "수정",
+        onclick: function () { openServerDialog(s); } }, ["수정"]));
+      out.push(el("button", { class: "btn sm", type: "button", title: "연결 테스트",
+        onclick: function (e) { testExisting(s, e.target); } }, ["테스트"]));
+    }
+    return out;
+  }
+
+  /* --------------------------------------------------------------- 표 */
+  function render() {
+    var body = $("rows");
+    var cards = $("cards");
+    clear(body); clear(cards);
+
+    $("mobile-note").hidden = !narrow();
+    $("term-note").textContent =
+      "한 사람이 동시에 열 수 있는 터미널은 " + TERM_MAX + "개까지다. " +
+      "지금 " + state.termOpen + "개 열려 있다. 사람이 터미널에서 직접 치는 명령은 " +
+      "등급을 매기지 않는다. 등급과 승인은 챗봇이 스스로 고른 명령에만 걸린다.";
+
+    if (!state.servers.length) {
+      var msg = state.level === "off"
+        ? "서버 사용이 허용되지 않았습니다. 관리자에게 요청하세요."
+        : (CAN_MANAGE ? "등록된 서버가 없습니다. 오른쪽 위 「서버 추가」로 첫 서버를 등록하세요."
+                      : "쓸 수 있는 서버가 없습니다. 관리자에게 요청하세요.");
+      body.appendChild(el("tr", {}, [el("td", { colspan: "7", class: "muted wrap", text: msg })]));
+      cards.appendChild(el("p", { class: "note", text: msg }));
+      return;
+    }
+
+    state.servers.forEach(function (s) {
+      body.appendChild(el("tr", {}, [
+        el("td", {}, [
+          el("div", { class: "srv-name", text: s.name }),
+          s.description ? el("div", { class: "srv-desc", text: s.description }) : null
+        ]),
+        el("td", { class: "mono addr", text: s.host + ":" + s.port }),
+        el("td", { class: "mono addr", text: s.username }),
+        el("td", {}, [el("span", { text: s.auth_label }),
+          s.auth_kind === "key" && s.key_name
+            ? el("span", { class: "muted", text: " · " + s.key_name }) : null]),
+        el("td", { class: "muted", text: ago(s.last_check_at) }),
+        el("td", {}, [stateBadge(s)]),
+        el("td", {}, [el("div", { class: "acts" }, actionButtons(s, false))])
+      ]));
+
+      var card = el("div", { class: "srv-card" }, [
+        el("div", { class: "line" }, [
+          el("span", { class: "srv-name", text: s.name }), stateBadge(s)]),
+        el("div", { class: "srv-desc mono", text: s.username + "@" + s.host + ":" + s.port }),
+        s.description ? el("div", { class: "srv-desc", text: s.description }) : null,
+        el("div", { class: "acts" }, actionButtons(s, true))
+      ]);
+      cards.appendChild(card);
+    });
+  }
+
+  function renderRelay() {
+    var b = $("relay-badge");
+    clear(b);
+    var r = state.relay || {};
+    if (r.connected) {
+      b.className = "badge ok";
+      b.appendChild(el("span", { class: "dot", "aria-hidden": "true" }));
+      b.appendChild(document.createTextNode("내 중계 연결됨"));
+      b.title = (r.name || "중계") + " · " + (r.version || "") +
+                " · 신호 " + ago(r.last_seen_at);
+    } else {
+      b.className = "badge bad";
+      b.textContent = "내 중계 꺼짐";
+      b.title = "내 VDI 의 중계 프로그램이 돌고 있지 않다";
+    }
+    $("term-count").textContent = state.termOpen
+      ? "터미널 " + state.termOpen + "/" + TERM_MAX + " 열림" : "";
+    renderMyRelay();
+  }
+
+  function bytes(n) {
+    if (!n) { return "0 B"; }
+    if (n < 1024) { return n + " B"; }
+    if (n < 1048576) { return (n / 1024).toFixed(1) + " KB"; }
+    return (n / 1048576).toFixed(1) + " MB";
+  }
+
+  /*
+   * 내 중계 칸.
+   *
+   * 사람마다 자기 VDI 에 깐다. 붙어 있으면 한 줄로 접어 두고, 안 붙어 있으면
+   * 할 일(받기 -> 등록 코드 -> 실행)을 순서대로 펼친다. 서버 목록을 아무리
+   * 봐도 중계가 없으면 아무것도 되지 않으므로 이 칸이 목록보다 위에 있다.
+   */
+  function renderMyRelay() {
+    var box = $("myrelay");
+    var r = state.relay || {};
+    clear(box);
+
+    var head = el("div", { class: "line" }, [
+      el("h2", { text: "내 중계" }),
+      r.connected
+        ? el("span", { class: "badge ok" },
+             [el("span", { class: "dot", "aria-hidden": "true" }), "붙어 있음"])
+        : el("span", { class: "badge bad", text: "붙어 있지 않음" }),
+      r.connected && r.name ? el("span", { class: "muted",
+        style: "font-size:12.5px", text: r.name + " · 신호 " + ago(r.last_seen_at) }) : null,
+      el("span", { class: "spacer" })
+    ]);
+
+    if (r.connected) {
+      head.appendChild(el("button", { class: "btn sm", type: "button",
+        onclick: revokeMine }, ["이 중계 끊기"]));
+      box.appendChild(head);
+      box.appendChild(el("p", { class: "why",
+        text: "내 VDI 에서 중계가 돌고 있습니다. 서버에는 내 VDI 의 키로 붙습니다." }));
+      return;
+    }
+
+    box.appendChild(head);
+
+    var prog = r.program || {};
+    var steps = el("ol", {}, [
+      el("li", {}, [
+        prog.available
+          ? el("a", { class: "btn sm primary", href: "/servers/program" },
+               ["중계 프로그램 받기"])
+          : el("span", { class: "muted",
+              text: "중계 프로그램이 아직 올라와 있지 않습니다. 관리자에게 요청하세요." }),
+        prog.available ? el("span", { class: "hash",
+          text: "  " + prog.name + " · " + bytes(prog.size) +
+                " · sha256 " + (prog.sha256 || "").slice(0, 16) + "…" }) : null
+      ]),
+      el("li", {}, [
+        el("button", { class: "btn sm", type: "button", onclick: issueMyCode },
+           ["등록 코드 받기"]),
+        el("span", { class: "hash", id: "code-note",
+          text: r.enroll ? "  아직 쓰지 않은 코드가 있습니다. 잃어버렸으면 다시 받으세요."
+                         : "" })
+      ]),
+      el("li", { text: "VDI 에서 relay.exe register 를 실행하고 두 줄을 적습니다." })
+    ]);
+    box.appendChild(steps);
+    box.appendChild(el("div", { id: "code-box" }));
+    box.appendChild(el("p", { class: "why" }, [
+      el("b", { text: "중계는 내 VDI 에서만 돕니다." }),
+      " 남의 중계가 붙어 있어도 내 일을 대신 해 주지 않습니다. 중계가 없으면 " +
+      "채팅도 터미널도 서버에 닿지 않습니다."
+    ]));
+  }
+
+  function issueMyCode() {
+    api("POST", "/api/my-relay/enroll", {}).then(function (d) {
+      var box = $("code-box");
+      clear(box);
+      var pretty = d.code.slice(0, 3) + " " + d.code.slice(3);
+      box.appendChild(el("div", { class: "code-big", text: pretty }));
+      box.appendChild(el("div", { class: "handout" }, [
+        el("span", { class: "k", text: "서버 주소 : " }), d.server_url, "\n",
+        el("span", { class: "k", text: "등록 코드 : " }), d.code
+      ]));
+      box.appendChild(el("p", { class: "why",
+        text: "10분 안에 VDI 에서 적어 넣으세요. 이 코드는 다시 보여 주지 않습니다. " +
+              "한 번 쓰면 죽습니다." }));
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  function revokeMine() {
+    ask({ title: "내 중계 끊기",
+          message: "내 VDI 의 중계 등록을 해제합니다. 열어 둔 터미널도 닫힙니다.\n\n" +
+                   "다시 쓰려면 등록 코드를 새로 받아 VDI 에서 다시 등록해야 합니다.",
+          confirmText: "끊기", danger: true }).then(function (yes) {
+      if (!yes) { return null; }
+      return api("POST", "/api/my-relay/revoke", {}).then(function () {
+        toast("내 중계를 끊었습니다.");
+        return load(true);
+      });
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  /*
+   * 10초마다 다시 본다. 바뀐 것이 없으면 **다시 그리지 않는다.**
+   *
+   * 매번 표를 새로 만들면 그 순간 누르고 있던 단추가 떨어져 나가서 클릭이
+   * 그냥 사라진다. 사람 눈에는 "가끔 안 눌린다" 로 보인다.
+   */
+  function r_warning(d) {
+    var r = d.relay || {};
+    if (r.connected) { return ""; }
+    if (!(d.servers || []).length) { return ""; }   // 빈 목록 안내가 이미 있다
+    return "내 VDI 의 중계가 붙어 있지 않습니다. 위 「내 중계」에서 프로그램을 " +
+           "받아 설치하고 등록 코드를 넣으세요.";
+  }
+
+  function signature(d) {
+    return JSON.stringify([d.servers, d.relay && d.relay.connected,
+                           d.level, d.term_open]);
+  }
+
+  function load(force) {
+    return api("GET", "/api/servers").then(function (d) {
+      var sig = signature(d);
+      state.servers = d.servers;
+      state.relay = d.relay;
+      state.level = d.level;
+      state.termOpen = d.term_open;
+      if (!force && sig === state.sig) { return; }
+      state.sig = sig;
+      renderRelay();
+      render();
+      notify(r_warning(d), d.relay && d.relay.connected ? "info" : "warn");
+    });
+  }
+
+  /* ------------------------------------------------------- 서버 추가 */
+  function setAuthMode() {
+    var kind = $("f-auth").value;
+    $("key-field").hidden = kind !== "key";
+    $("pw-field").hidden = kind !== "password";
+    $("auth-help").textContent = kind === "key"
+      ? "이쪽을 권한다. 중계 PC 에 둔 키로 붙으므로 비밀번호를 서버에 두지 않는다."
+      : "윈도우의 ssh 는 비밀번호를 비대화형으로 넣지 못한다. 중계가 plink.exe 를 쓴다. " +
+        "plink.exe 가 없으면 이 방식은 실패한다.";
+    invalidate();
+  }
+
+  function invalidate() {
+    state.tested = false;
+    $("btn-save").disabled = true;
+    $("save-help").textContent = "연결 테스트가 성공해야 저장이 눌린다.";
+    clear($("test-box"));
+  }
+
+  function formData() {
+    return {
+      name: $("f-name").value.trim(),
+      host: $("f-host").value.trim(),
+      port: parseInt($("f-port").value, 10) || 22,
+      username: $("f-user").value.trim(),
+      auth_kind: $("f-auth").value,
+      key_name: $("f-key").value.trim(),
+      password: $("f-pw").value,
+      description: $("f-desc").value.trim(),
+      is_enabled: $("f-enabled").checked
+    };
+  }
+
+  function openServerDialog(s) {
+    state.editing = s || null;
+    $("server-title").firstChild.textContent = s ? "서버 수정" : "서버 추가";
+    $("f-name").value = s ? s.name : "";
+    $("f-host").value = s ? s.host : "";
+    $("f-port").value = s ? s.port : 22;
+    $("f-user").value = s ? s.username : "";
+    $("f-auth").value = s ? s.auth_kind : "key";
+    $("f-key").value = s ? (s.key_name || "") : "";
+    $("f-pw").value = "";
+    $("f-desc").value = s ? (s.description || "") : "";
+    $("f-enabled").checked = s ? !!s.is_enabled : true;
+    $("enable-line").hidden = !s;
+    $("pw-help").textContent = (s && s.has_secret)
+      ? "저장된 값: " + s.secret_preview + " · 비워서 저장하면 그대로 둔다."
+      : "저장한 뒤로는 다시 보여 주지 않는다. 미리보기만 남는다.";
+    setAuthMode();
+    $("server-overlay").hidden = false;
+    $("f-name").focus();
+  }
+
+  function closeServerDialog() {
+    $("server-overlay").hidden = true;
+    state.editing = null;
+  }
+
+  function showTest(ok, d) {
+    /* 중계가 이미 사람이 읽을 문장 하나로 만들어 보낸다.
+       ("연결 확인 · 0.42초 · SSH-2.0-OpenSSH_8.0p1 · svc_ops@nfs-181 · 키 받아들여짐")
+       여기서 걸린 시간과 배너를 또 붙이면 같은 말이 두 번 나온다. */
+    var box = $("test-box");
+    clear(box);
+    var line = d.message || (ok ? "연결 확인" : "연결 실패");
+    if (d.banner && line.indexOf(d.banner) < 0) { line += " · " + d.banner; }
+    box.appendChild(el("div", { class: "alert " + (ok ? "ok" : "error"), text: line }));
+  }
+
+  function testDraft() {
+    var btn = $("btn-test");
+    btn.disabled = true;
+    btn.textContent = "확인 중…";
+    var payload = formData();
+    var url = "/api/servers/test";
+    /* 수정 중이고 비밀번호를 비워 두었다면 저장된 값으로 시험한다.
+       그때는 초안이 아니라 등록된 서버를 두드린다. */
+    if (state.editing && !payload.password && state.editing.auth_kind === "password") {
+      url = "/api/servers/" + state.editing.id + "/test";
+      payload = undefined;
+    }
+    api("POST", url, payload).then(function (d) {
+      showTest(d.ok, d);
+      state.tested = !!d.ok;
+      $("btn-save").disabled = !d.ok;
+      $("save-help").textContent = d.ok
+        ? "지금 붙는 것을 확인했다. 저장할 수 있다."
+        : "실패한 채로는 저장하지 않는다. 주소·계정·인증을 다시 본다.";
+    }).catch(function (e) {
+      showTest(false, { message: e.message });
+      $("save-help").textContent = "실패한 채로는 저장하지 않는다.";
+    }).then(function () {
+      btn.disabled = false;
+      btn.textContent = "연결 테스트";
+    });
+  }
+
+  function saveServer() {
+    if (!state.tested) { toast("연결 테스트가 먼저다."); return; }
+    var payload = formData();
+    var p = state.editing
+      ? api("PATCH", "/api/servers/" + state.editing.id, payload)
+      : api("POST", "/api/servers", payload);
+    $("btn-save").disabled = true;
+    p.then(function (d) {
+      closeServerDialog();
+      toast("저장했습니다.");
+      /* 방금 한 테스트는 **입력칸의 값**으로 한 것이다. 저장된 뒤에는 암호화해
+         넣어 둔 값으로 붙는다. 둘이 같다는 보장을 화면이 대신 말하면 안 되므로,
+         저장한 그 서버로 한 번 더 확인해서 「마지막 확인」을 채운다. */
+      var saved = d && d.server;
+      if (saved) {
+        return api("POST", "/api/servers/" + saved.id + "/test")
+          .catch(function () { return null; })
+          .then(load);
+      }
+      return load();
+    }).catch(function (e) {
+      toast(e.message);
+      $("btn-save").disabled = false;
+    });
+  }
+
+  function testExisting(s, btn) {
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "확인 중…";
+    api("POST", "/api/servers/" + s.id + "/test").then(function (d) {
+      notify((d.ok ? "연결 확인 · " : "연결 실패 · ") + s.name + " · " +
+             (d.message || "") + (d.elapsed ? " · " + d.elapsed + "초" : ""),
+             d.ok ? "ok" : "error");
+      return load();
+    }).catch(function (e) {
+      notify(s.name + " 연결 테스트 실패: " + e.message, "error");
+    }).then(function () {
+      btn.disabled = false;
+      btn.textContent = label;
+    });
+  }
+
+  /* ------------------------------------------------------- 채팅 열기 */
+  function openChatDialog(s) {
+    state.picking = s;
+    $("chat-title").firstChild.textContent = s.name + " 로 물어보기";
+    $("chat-private").checked = true;
+    var list = $("chat-list");
+    clear(list);
+    list.appendChild(el("p", { class: "help", text: "불러오는 중…" }));
+    $("chat-overlay").hidden = false;
+
+    api("GET", "/api/servers/" + s.id + "/sessions").then(function (d) {
+      clear(list);
+      if (!d.same.length && !d.others.length) {
+        list.appendChild(el("p", { class: "help",
+          text: "이어서 쓸 대화가 없습니다. 새 대화로 시작하세요." }));
+        return;
+      }
+      if (d.same.length) {
+        list.appendChild(el("div", { class: "help",
+          style: "margin-bottom:var(--s2)", text: "이어서 쓸 대화" }));
+        d.same.forEach(function (x) { list.appendChild(pickRow(s, x, false)); });
+      }
+      if (d.others.length) {
+        list.appendChild(el("div", { class: "help",
+          style: "margin:var(--s4) 0 var(--s2)",
+          text: "다른 서버에 붙은 대화 (고르면 이 대화의 서버가 " + s.name + " 로 바뀐다)" }));
+        d.others.forEach(function (x) { list.appendChild(pickRow(s, x, true)); });
+      }
+    }).catch(function (e) {
+      clear(list);
+      list.appendChild(el("p", { class: "alert error", text: e.message }));
+    });
+  }
+
+  function pickRow(server, sess, isOther) {
+    var badge = sess.server
+      ? el("span", { class: "badge", text: sess.server.name })
+      : el("span", { class: "badge", text: "서버 없음" });
+    return el("button", {
+      class: "pick" + (isOther ? " other" : ""), type: "button",
+      onclick: function () { useSession(server, sess); }
+    }, [
+      el("span", { class: "nm", text: sess.name }),
+      badge,
+      el("span", { class: "when", text: ago(sess.updated_at) })
+    ]);
+  }
+
+  function useSession(server, sess) {
+    var same = sess.server && sess.server.id === server.id;
+    var go = function () { location.href = "/?session=" + sess.id; };
+    if (same) { go(); return; }
+    api("PATCH", "/api/sessions/" + sess.id, { server_id: server.id })
+      .then(go).catch(function (e) { toast(e.message); });
+  }
+
+  function newChat() {
+    var s = state.picking;
+    if (!s) { return; }
+    var btn = $("chat-new");
+    btn.disabled = true;
+    api("POST", "/api/sessions", {
+      server_id: s.id,
+      name: s.name + " 작업",
+      visibility: $("chat-private").checked ? "private" : "public"
+    }).then(function (d) {
+      location.href = "/?session=" + d.session.id;
+    }).catch(function (e) {
+      toast(e.message);
+      btn.disabled = false;
+    });
+  }
+
+  /* ------------------------------------------------------------- 시작 */
+  if (CAN_MANAGE) { $("add-server").onclick = function () { openServerDialog(null); }; }
+  $("refresh").onclick = function () { load(true).catch(function (e) { toast(e.message); }); };
+  $("btn-cancel").onclick = closeServerDialog;
+  $("btn-test").onclick = testDraft;
+  $("btn-save").onclick = saveServer;
+  $("f-auth").onchange = setAuthMode;
+  ["f-name", "f-host", "f-port", "f-user", "f-key", "f-pw"].forEach(function (id) {
+    $(id).oninput = invalidate;
+  });
+  $("chat-cancel").onclick = function () { $("chat-overlay").hidden = true; };
+  $("chat-new").onclick = newChat;
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") { return; }
+    if (!$("server-overlay").hidden) { closeServerDialog(); }
+    if (!$("chat-overlay").hidden) { $("chat-overlay").hidden = true; }
+  });
+  window.addEventListener("resize", function () { render(); });   // 표 <-> 카드
+
+  load().then(function () {
+    /* 터미널 화면의 「이 서버로 채팅」이 ?chat=<id> 로 돌아온다.
+       목록을 한 번 더 고르게 하지 않고 그 서버의 대화상자를 바로 연다. */
+    var m = /[?&]chat=(\d+)/.exec(location.search);
+    if (!m) { return; }
+    history.replaceState(null, "", location.pathname);
+    var want = parseInt(m[1], 10);
+    var hit = state.servers.filter(function (s) { return s.id === want; })[0];
+    if (hit) { openChatDialog(hit); }
+  }).catch(function (e) { notify("목록을 불러오지 못했습니다: " + e.message, "error"); });
+  /* 중계가 붙었는지/끊겼는지는 사람이 새로고침하지 않아도 바뀐다.
+     10초마다 가볍게 다시 본다. (터미널 폴링과 달리 여기는 느려도 된다) */
+  setInterval(function () { load().catch(function () {}); }, 10000);
+})();
+</script>
+</body>
+</html>

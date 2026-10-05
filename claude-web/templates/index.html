@@ -856,6 +856,117 @@ body.dragging #drop-hint { display: grid; }
   object-fit: contain;
 }
 
+/* =========================================================================
+   6.5 서버 (SSH 중계)
+
+   대화 하나에 서버 하나다. 그 사실이 두 자리에 보인다.
+     - 머리말의 칩  : 지금 이 대화가 어느 서버에 붙어 있는지
+     - 입력칸 위 칩 : 다음 질문이 어디로 나가는지. 눌러서 바꾼다
+
+   승인 카드는 말풍선 안에 들어간다. 바깥에 두면 어느 답에 딸린 것인지
+   흐려진다.
+   ========================================================================= */
+.srv-chip {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 220px; min-height: 30px;
+  padding: 0 12px;
+  border: 0; border-radius: var(--r-pill);
+  background: var(--accent-soft); color: var(--accent-press);
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+}
+.srv-chip:hover { background: var(--track); }
+.srv-chip.none { background: var(--panel2); color: var(--muted); font-weight: 400; }
+.srv-chip.bad { background: var(--error-bg); color: var(--error-fg); }
+.srv-chip .nm { overflow: hidden; text-overflow: ellipsis; }
+.srv-chip svg {
+  width: 13px; height: 13px; flex: 0 0 auto;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+#srv-bar { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); }
+#srv-bar .why { font-size: 11.5px; color: var(--muted); }
+
+/* 서버 고르기. 입력칸 바로 위에 뜬다 */
+.composer-inner { position: relative; }
+#srv-pop {
+  position: absolute;
+  left: 0; bottom: calc(100% + 8px);
+  z-index: 30;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  padding: var(--s3);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--sh-modal);
+}
+#srv-pop input[type="search"] {
+  width: 100%; min-height: 38px; margin-bottom: var(--s2);
+  padding: 0 var(--s3);
+  border: 0; border-radius: var(--r-sm);
+  background: var(--panel2); color: var(--text); font: inherit; font-size: 14px;
+}
+#srv-pop .opt {
+  width: 100%;
+  display: flex; align-items: center; gap: var(--s2);
+  min-height: 42px; padding: var(--s1) var(--s3);
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text);
+  font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+#srv-pop .opt:hover { background: var(--panel2); }
+#srv-pop .opt.on { background: var(--accent-soft); color: var(--accent-press); font-weight: 600; }
+#srv-pop .opt .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#srv-pop .opt .sub { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+#srv-pop .dead {
+  display: flex; align-items: center; gap: var(--s2);
+  min-height: 42px; padding: var(--s1) var(--s3);
+  font-size: 14px; color: var(--muted); opacity: .6; cursor: not-allowed;
+}
+#srv-pop .sep { height: 1px; margin: var(--s2) var(--s3); background: var(--border); }
+#srv-pop .foot { padding: var(--s2) var(--s3) 0; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
+
+/* 승인 카드 */
+.cmd {
+  margin-top: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-sm);
+  font-size: 13px; line-height: 1.7;
+}
+.cmd.pending { background: var(--warn-bg); color: var(--warn-fg); }
+.cmd.okcard { background: var(--ok-bg); color: var(--ok-fg); }
+.cmd.badcard { background: var(--error-bg); color: var(--error-fg); }
+.cmd.flat { background: var(--code-bg); color: var(--muted); }
+.cmd .h { font-weight: 600; margin-bottom: 4px; }
+.cmd code {
+  display: block;
+  margin: var(--s2) 0;
+  padding: 10px var(--s3);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12.5px;
+  overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.cmd .kv2 { display: flex; flex-wrap: wrap; gap: 2px var(--s4); font-size: 12px; }
+.cmd .acts { display: flex; gap: var(--s2); margin-top: var(--s3); align-items: center; }
+.cmd .left { font-size: 11.5px; }
+
+/* 세션 목록의 서버 배지 */
+.item .srvb {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center;
+  max-width: 92px; padding: 1px 8px;
+  border-radius: var(--r-pill);
+  background: var(--panel2); color: var(--muted);
+  font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.item.active .srvb { background: var(--panel); }
+
 #toast {
   position: fixed;
   left: 50%;
@@ -1182,6 +1293,8 @@ body.dragging #drop-hint { display: grid; }
         <div id="chat-title">chat-bot</div>
         <div id="chat-sub"></div>
       </div>
+      <button class="srv-chip" id="head-chip" type="button" hidden
+              aria-haspopup="true" aria-expanded="false"></button>
       <button class="btn" id="install-btn" hidden>앱 설치</button>
     </header>
 
@@ -1189,6 +1302,8 @@ body.dragging #drop-hint { display: grid; }
 
     <div id="composer-wrap">
       <div class="composer-inner">
+        <div id="srv-pop" role="dialog" aria-label="서버 고르기" hidden></div>
+        <div id="srv-bar" hidden></div>
         <div id="preview"></div>
         <div class="composer">
           <button id="attach-btn" type="button" aria-label="이미지 첨부">
@@ -1227,6 +1342,10 @@ body.dragging #drop-hint { display: grid; }
   var ME = {{ me|tojson }};
   var IS_ADMIN = {{ is_admin|tojson }};
   var CSRF = {{ csrf|tojson }};
+  /* 「서버」 메뉴를 못 받은 사람에게는 서버 칩을 아예 그리지 않는다.
+     그린다고 쓸 수 있는 것도 아니다. (/api/servers 가 403 이다) */
+  var HAS_SERVERS = {{ 'true' if 'servers' in menus else 'false' }};
+  var HAS_NOTES = {{ 'true' if 'notes' in menus else 'false' }};
 
   /* ---------------------------------------------------------------- 시각
      서버가 넣는 문자열은 "YYYY-MM-DD HH:MM:SS" 이고 서버의 지역시각이다.
@@ -1299,7 +1418,11 @@ body.dragging #drop-hint { display: grid; }
     projectId: null, sessionId: null, projects: [], sessions: [],
     busy: false, files: [], canManageProjects: false, session: null,
     scope: localStorage.getItem("session_scope") || "all",
-    query: ""
+    query: "",
+    /* 서버 목록은 한 번 받아서 들고 있는다. 고를 때마다 다시 묻지 않는다.
+       허용이 바뀌면 다음 질문에서 서버가 막으므로 화면이 거짓말을 해도
+       위험하지 않다. */
+    servers: null, srvQuery: ""
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -1582,6 +1705,15 @@ body.dragging #drop-hint { display: grid; }
 
     renderContent(bubble, msg.content);
 
+    /* 챗봇이 고른 명령. 조회는 이미 실행된 기록이고, 변경은 승인 카드다. */
+    if (msg.commands && msg.commands.length) {
+      msg.commands.forEach(function (c) {
+        bubble.appendChild(commandCard(c, msg));
+      });
+      var ranNote = cmdRoleNote(msg.commands);
+      if (ranNote) { r.appendChild(document.createTextNode(" · " + ranNote)); }
+    }
+
     /* 아바타와 말풍선을 한 줄에 놓고, 이름표는 그 아래에 둔다.
        보낸 사람 쪽은 CSS 가 이 줄을 뒤집어 아바타를 오른쪽으로 보낸다. */
     var line = document.createElement("div");
@@ -1595,6 +1727,186 @@ body.dragging #drop-hint { display: grid; }
     listEl.appendChild(el);
     scrollToBottom();
     return el;
+  }
+
+  /* -------------------------------------------------- 서버 명령 카드 */
+  /*
+   * 상태마다 다른 것을 보여 준다.
+   *   pending  승인 카드. 사람이 누르기 전에는 서버로 나가지 않았다.
+   *   done     실행됐다. 조회면 조용한 줄, 승인받은 변경이면 누가 언제 승인했는지.
+   *   그 외    왜 안 나갔는지. (거절/시간초과/차단/권한없음)
+   */
+  var LEVEL_WORD = { read: "조회", write: "변경", blocked: "차단" };
+
+  function cmdRoleNote(cmds) {
+    var ran = cmds.filter(function (c) {
+      return c.state === "done" && c.level === "read";
+    });
+    if (ran.length) {
+      var ms = ran.reduce(function (a, c) { return a + (c.duration_ms || 0); }, 0);
+      return "조회 등급 · 승인 없이 실행 · " + (ms / 1000).toFixed(1) + "초";
+    }
+    var ok = cmds.filter(function (c) { return c.state === "done" && c.approver_name; })[0];
+    if (ok) {
+      return "승인 " + ok.approver_name + " " + timeLabel(ok.approved_at) +
+             " · 기록에 남음";
+    }
+    return "";
+  }
+
+  function commandCard(c, msg) {
+    if (c.state === "done" && c.level === "read") {
+      var flat = document.createElement("div");
+      flat.className = "cmd flat";
+      flat.appendChild(elx("span", "h", "조회 · " + (c.server_name || "")));
+      flat.appendChild(elx("code", null, c.command));
+      return flat;
+    }
+    if (c.state === "pending") { return pendingCard(c); }
+
+    var box = document.createElement("div");
+    if (c.state === "done") {
+      box.className = "cmd okcard";
+      box.appendChild(elx("div", "h", (c.approver_name || "누군가") +
+        " 님이 승인했습니다 · " + (c.approved_at || "").slice(11, 19)));
+      box.appendChild(elx("code", null, c.command));
+      box.appendChild(elx("div", "kv2",
+        "되돌릴 수 없는 작업 · 종료 " + (c.exit_code === null ? "?" : c.exit_code) +
+        " · " + ((c.duration_ms || 0) / 1000).toFixed(1) + "초"));
+      box.appendChild(afterActions(c, msg));
+      return box;
+    }
+    box.className = "cmd " + (c.state === "failed" || c.state === "blocked"
+                              ? "badcard" : "flat");
+    var head = {
+      rejected: "거절했습니다. 서버로 나가지 않았습니다.",
+      expired: "승인하지 않아 취소되었습니다. 서버로 나가지 않았습니다.",
+      blocked: "실행하지 않는 명령입니다.",
+      denied: "권한이 없어 실행하지 않았습니다.",
+      failed: "실행했지만 실패했습니다.",
+      running: "실행 중입니다."
+    }[c.state] || c.state;
+    box.appendChild(elx("div", "h", head));
+    box.appendChild(elx("code", null, c.command));
+    if (c.reason) { box.appendChild(elx("div", "kv2", c.reason)); }
+    return box;
+  }
+
+  /*
+   * 승인해서 실행한 뒤에 할 수 있는 두 가지.
+   *
+   *   메모로 남기기          이 결과를 메모 한 장으로 옮긴다. 작업 기록은
+   *                          대화 안에만 두면 다음 사람이 못 찾는다.
+   *   터미널에서 눈으로 확인  같은 서버에 직접 붙어 본다. 바꾸는 작업을 한
+   *                          뒤에는 숫자를 눈으로 한 번 더 보는 것이 맞다.
+   *
+   * 메뉴를 못 받은 사람에게는 그리지 않는다. 눌러도 403 인 단추를 두지 않는다.
+   */
+  function afterActions(c, msg) {
+    var row = document.createElement("div");
+    row.className = "acts";
+    if (HAS_NOTES) {
+      var note = document.createElement("button");
+      note.className = "btn sm";
+      note.type = "button";
+      note.textContent = "메모로 남기기";
+      note.onclick = function () { saveAsNote(c, msg, note); };
+      row.appendChild(note);
+    }
+    if (HAS_SERVERS && c.server_id) {
+      var term = document.createElement("a");
+      term.className = "btn sm";
+      term.href = "/servers/" + c.server_id + "/terminal";
+      term.textContent = "터미널에서 눈으로 확인";
+      row.appendChild(term);
+    }
+    return row;
+  }
+
+  function saveAsNote(c, msg, btn) {
+    var when = (c.approved_at || "").slice(0, 16) || timeLabel(msg.created_at);
+    var title = (c.server_name || "서버") + " 작업 " + when;
+    var body = [
+      "서버 : " + (c.server_name || "-"),
+      "명령 : " + c.command,
+      "승인 : " + (c.approver_name || "-") + " " + (c.approved_at || ""),
+      "결과 : 종료 " + (c.exit_code === null ? "?" : c.exit_code) +
+        " · " + ((c.duration_ms || 0) / 1000).toFixed(1) + "초",
+      "",
+      (msg.content || "")
+    ].join(String.fromCharCode(10));
+    btn.disabled = true;
+    api("POST", "/api/notes", { title: title.slice(0, 200), content: body,
+                                visibility: "private" })
+      .then(function () { toast("메모로 남겼습니다. 메모 화면에서 볼 수 있습니다."); })
+      .catch(function (e) { toast(e.message); btn.disabled = false; });
+  }
+
+  function pendingCard(c) {
+    var box = document.createElement("div");
+    box.className = "cmd pending";
+    box.appendChild(elx("div", "h", "이 명령을 실행하려면 승인이 필요합니다"));
+    box.appendChild(elx("code", null, c.command));
+    box.appendChild(elx("div", "kv2",
+      "서버 " + (c.server_name || "-") + "   등급 " +
+      (LEVEL_WORD[c.level] || c.level) + (c.reason ? "   " + c.reason : "")));
+
+    var acts = document.createElement("div");
+    acts.className = "acts";
+    var yes = document.createElement("button");
+    yes.className = "btn sm primary";
+    yes.type = "button";
+    yes.textContent = "승인하고 실행";
+    var no = document.createElement("button");
+    no.className = "btn sm";
+    no.type = "button";
+    no.textContent = "거절";
+    var left = document.createElement("span");
+    left.className = "left";
+
+    function decide(path, label) {
+      yes.disabled = true; no.disabled = true;
+      left.textContent = label;
+      api("POST", "/api/ssh/commands/" + c.id + "/" + path)
+        .then(function () { return loadMessages(); })
+        .catch(function (e) {
+          toast(e.message);
+          yes.disabled = false; no.disabled = false;
+          left.textContent = "";
+        });
+    }
+    yes.onclick = function () { decide("approve", "실행 중…"); };
+    no.onclick = function () { decide("reject", "거절 중…"); };
+
+    acts.appendChild(yes);
+    acts.appendChild(no);
+    acts.appendChild(left);
+    box.appendChild(acts);
+
+    /* 남은 시간을 세어 준다. 0 이 되면 서버가 이미 취소한 상태다. */
+    var secs = c.expires_in || 0;
+    var note = elx("div", "left", "");
+    box.appendChild(note);
+    function tickLeft() {
+      if (!note.isConnected) { return; }
+      if (secs <= 0) {
+        note.textContent = "시간이 지났습니다. 다시 물어봐 주세요.";
+        yes.disabled = true;
+        return;
+      }
+      note.textContent = secs + "초 안에 누르지 않으면 취소됩니다.";
+      secs -= 1;
+      setTimeout(tickLeft, 1000);
+    }
+    tickLeft();
+    return box;
+  }
+
+  function elx(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (text !== null && text !== undefined) { n.textContent = text; }
+    return n;
   }
 
   /* 날짜가 바뀌는 자리에만 알약을 넣는다. 마지막으로 넣은 날짜를 목록 자체에
@@ -1694,6 +2006,16 @@ body.dragging #drop-hint { display: grid; }
       stack.appendChild(ow);
     }
     it.appendChild(stack);
+
+    /* 어느 서버에 붙은 대화인지 목록에서 바로 보인다. 들어가 봐야 아는
+       것이면 "그 대화가 어디로 나가는지" 를 매번 확인하게 된다. */
+    if (opts.server !== undefined && opts.server !== null) {
+      var sb = document.createElement("span");
+      sb.className = "srvb";
+      sb.textContent = opts.server;
+      sb.title = opts.serverTitle || opts.server;
+      it.appendChild(sb);
+    }
 
     var cnt = document.createElement("span");
     cnt.className = "count";
@@ -1884,6 +2206,10 @@ body.dragging #drop-hint { display: grid; }
         count: s.message_count,
         vis: s.visibility,
         owner: ownerLabel(s),
+        server: serverBadgeText(s),
+        serverTitle: s.server ? (s.server.usable ? s.server.name + " 에 붙은 대화"
+                                                 : s.server.name + " · 지금 쓸 수 없음")
+                              : "붙은 서버가 없는 대화",
         active: s.id === state.sessionId,
         onSelect: function () { selectSession(s.id); },
         actions: actions
@@ -1898,6 +2224,14 @@ body.dragging #drop-hint { display: grid; }
     var el = $("session-count");
     if (!el) { return; }
     el.textContent = state.sessions.length ? String(state.sessions.length) : "";
+  }
+
+  function serverBadgeText(s) {
+    if (!HAS_SERVERS) { return null; }
+    if (s.server) { return s.server.name; }
+    /* 서버를 쓰는 사람에게만 "서버 없음" 이 정보가 된다. 안 쓰는 사람에게는
+       모든 줄에 같은 배지가 붙어 눈만 어지럽다. */
+    return state.sessions.some(function (x) { return !!x.server; }) ? "서버 없음" : null;
   }
 
   function ownerLabel(s) {
@@ -2030,6 +2364,185 @@ body.dragging #drop-hint { display: grid; }
     $("attach-btn").disabled = disabled;
     inputEl.placeholder = !state.sessionId ? "세션을 선택하세요"
       : (canWrite ? "메시지를 입력하세요..." : "이 세션에는 작성할 수 없습니다");
+
+    renderServerChips(s);
+  }
+
+  /* ==================================================================
+     서버 (SSH 중계)
+
+     대화 하나에 서버 하나. 바꾸면 그 다음 질문부터 적용된다. 이미 받은 답은
+     어느 서버에서 나온 것인지 그대로 남는다.
+     ================================================================== */
+  function currentSession() {
+    return state.sessions.filter(function (x) { return x.id === state.sessionId; })[0]
+      || state.session;
+  }
+
+  function serverIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    ["M3 5h18v6H3z", "M3 13h18v6H3z"].forEach(function (d) {
+      var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    });
+    return svg;
+  }
+
+  function chipFill(btn, sess) {
+    btn.textContent = "";
+    var srv = sess ? sess.server : null;
+    btn.className = "srv-chip" + (!srv ? " none" : (srv.usable ? "" : " bad"));
+    btn.appendChild(serverIcon());
+    var nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = srv ? srv.name : "서버 없이 쓰는 중";
+    btn.appendChild(nm);
+    btn.title = srv
+      ? (srv.usable ? srv.name + " 에 붙어 있습니다. 눌러서 바꿉니다."
+                    : srv.name + " 를 지금 쓸 수 없습니다. 눌러서 다른 서버를 고르세요.")
+      : "눌러서 서버를 고릅니다. 서버 없이도 대화할 수 있습니다.";
+  }
+
+  function renderServerChips(sess) {
+    var head = $("head-chip"), bar = $("srv-bar");
+    var s = sess || state.session;
+    var show = HAS_SERVERS && !!s;
+    head.hidden = !show;
+    bar.hidden = !show;
+    if (!show) { return; }
+
+    chipFill(head, s);
+    head.onclick = toggleServerPop;
+
+    bar.textContent = "";
+    var chip = document.createElement("button");
+    chip.type = "button";
+    chip.setAttribute("aria-haspopup", "true");
+    chipFill(chip, s);
+    chip.onclick = toggleServerPop;
+    bar.appendChild(chip);
+
+    var why = document.createElement("span");
+    why.className = "why";
+    if (!s.server) {
+      why.textContent = "서버를 고르면 그 서버를 직접 보고 답합니다.";
+    } else if (!s.server.usable) {
+      why.textContent = "이 서버로는 지금 질문이 나가지 않습니다.";
+    } else {
+      why.textContent = "다음 질문은 이 서버로 나갑니다.";
+    }
+    bar.appendChild(why);
+  }
+
+  function toggleServerPop() {
+    var pop = $("srv-pop");
+    if (!pop.hidden) { closeServerPop(); return; }
+    pop.hidden = false;
+    $("head-chip").setAttribute("aria-expanded", "true");
+    renderServerPop();
+    if (state.servers === null) {
+      api("GET", "/api/servers").then(function (d) {
+        state.servers = d.servers;
+        renderServerPop();
+      }).catch(function (e) {
+        state.servers = [];
+        renderServerPop();
+        toast(e.message);
+      });
+    }
+  }
+
+  function closeServerPop() {
+    $("srv-pop").hidden = true;
+    $("head-chip").setAttribute("aria-expanded", "false");
+    state.srvQuery = "";
+  }
+
+  function renderServerPop() {
+    var pop = $("srv-pop");
+    pop.textContent = "";
+    var sess = currentSession();
+    var cur = sess && sess.server ? sess.server.id : null;
+
+    var q = document.createElement("input");
+    q.type = "search";
+    q.placeholder = "서버 이름";
+    q.value = state.srvQuery;
+    q.setAttribute("aria-label", "서버 이름 검색");
+    q.oninput = function () { state.srvQuery = this.value; renderServerPop(); };
+    pop.appendChild(q);
+
+    if (state.servers === null) {
+      pop.appendChild(elx("div", "foot", "불러오는 중…"));
+      return;
+    }
+
+    var needle = state.srvQuery.trim().toLowerCase();
+    var list = state.servers.filter(function (x) {
+      return !needle || (x.name + " " + x.host).toLowerCase().indexOf(needle) >= 0;
+    });
+
+    if (!list.length) {
+      pop.appendChild(elx("div", "foot",
+        state.servers.length ? "찾는 이름이 없습니다."
+                             : "쓸 수 있는 서버가 없습니다. 관리자에게 요청하세요."));
+    }
+
+    list.forEach(function (x) {
+      /* 붙지 않는 서버는 고를 수 없는 줄로 둔다. 목록에서 지우면 "왜 없지" 가
+         되고, 누를 수 있게 두면 고른 다음에 실패한다. */
+      var dead = !x.is_enabled || x.last_check_ok === false;
+      if (dead) {
+        var d = document.createElement("div");
+        d.className = "dead";
+        d.appendChild(elx("span", "nm", x.name));
+        d.appendChild(elx("span", "sub",
+          !x.is_enabled ? "꺼짐 · 고를 수 없다" : "붙지 않는다 · 고를 수 없다"));
+        pop.appendChild(d);
+        return;
+      }
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "opt" + (x.id === cur ? " on" : "");
+      b.appendChild(elx("span", "nm", x.name));
+      if (x.last_check_ok === null || x.last_check_ok === undefined) {
+        b.appendChild(elx("span", "sub", "확인 필요"));
+      }
+      b.onclick = function () { pickServer(x.id); };
+      pop.appendChild(b);
+    });
+
+    pop.appendChild(elx("div", "sep", null));
+    var none = document.createElement("button");
+    none.type = "button";
+    none.className = "opt" + (cur === null ? " on" : "");
+    none.appendChild(elx("span", "nm", "서버 없이 쓰기"));
+    none.appendChild(elx("span", "sub", "일반 질문만"));
+    none.onclick = function () { pickServer(null); };
+    pop.appendChild(none);
+
+    pop.appendChild(elx("div", "foot",
+      "사용 허용을 받은 서버만 나옵니다. 서버를 바꾸면 그 다음 질문부터 " +
+      "적용되고, 이미 받은 답은 그대로 남습니다."));
+  }
+
+  function pickServer(id) {
+    var sid = state.sessionId;
+    if (!sid) { return; }
+    closeServerPop();
+    api("PATCH", "/api/sessions/" + sid, { server_id: id })
+      .then(function (d) {
+        state.session = d.session;
+        var i = state.sessions.map(function (x) { return x.id; }).indexOf(sid);
+        if (i >= 0) { state.sessions[i] = d.session; }
+        renderSessions();
+        renderChatHeader();
+        toast(d.session.server ? d.session.server.name + " 로 바꿨습니다."
+                               : "서버 없이 쓰는 대화로 바꿨습니다.");
+      }).catch(function (e) { toast(e.message); });
   }
 
   function emptyChat(text) {
@@ -2334,11 +2847,45 @@ body.dragging #drop-hint { display: grid; }
     };
   }
 
+  /* 서버 고르기는 바깥을 누르거나 Esc 로 닫는다. 열어 둔 채로 다른 일을
+     하면 지금 어느 서버인지와 화면이 어긋난다. */
+  document.addEventListener("click", function (e) {
+    var pop = $("srv-pop");
+    if (pop.hidden) { return; }
+    if (pop.contains(e.target)) { return; }
+    if (e.target.closest && e.target.closest(".srv-chip")) { return; }
+    closeServerPop();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !$("srv-pop").hidden) { closeServerPop(); }
+  });
+
   /* ------------------------------------------------------------- 시작 */
   initUser();
   initFilters();
   renderChatHeader();
-  loadProjects().catch(function (e) { toast("초기 로딩 실패: " + e.message); });
+  /*
+   * 서버 목록에서 「채팅」을 눌러 들어오면 ?session=<id> 가 붙어 있다.
+   * 그 대화가 어느 프로젝트에 있는지 먼저 물어보고 그쪽으로 들어간다.
+   * (프로젝트를 고르는 화면을 한 번 더 거치게 하면 "채팅" 을 누른 뜻이 사라진다)
+   */
+  function boot() {
+    var m = /[?&]session=(\d+)/.exec(location.search);
+    if (!m) { return loadProjects(); }
+    var sid = parseInt(m[1], 10);
+    history.replaceState(null, "", location.pathname);
+    return api("GET", "/api/sessions/" + sid).then(function (d) {
+      state.sessionId = sid;
+      state.session = d.session;
+      localStorage.setItem("last_session_id", sid);
+      return loadProjects(d.session.project_id);
+    }).catch(function (e) {
+      toast("그 대화를 열지 못했습니다: " + e.message);
+      return loadProjects();
+    });
+  }
+
+  boot().catch(function (e) { toast("초기 로딩 실패: " + e.message); });
 })();
 </script>
 </body>

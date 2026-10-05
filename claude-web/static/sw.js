@@ -20,7 +20,7 @@
  * VERSION 을 올리면 activate 에서 이전 캐시를 통째로 지운다.
  * v1 이 캐시해 둔 "/" 응답도 이때 함께 제거된다.
  */
-const VERSION = "chat-bot-v9";
+const VERSION = "chat-bot-v10";
 
 const SHELL = [
   "/manifest.webmanifest",
@@ -38,6 +38,9 @@ const SHELL = [
 
 // 어떤 경우에도 캐시하지 않을 경로
 const NEVER_CACHE = ["/api/", "/admin", "/notes", "/patch", "/_patch/",
+                     /* 서버 목록과 웹 터미널. 터미널 화면에는 사내 서버의
+                        출력이 흐른다. 디스크에 남을 자리가 아니다. */
+                     "/servers",
                      "/no-access", "/login", "/logout", "/setup",
                      "/health", "/sw.js"];
 

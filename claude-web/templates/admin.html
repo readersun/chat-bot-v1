@@ -740,11 +740,22 @@
         return el("div", { class: "field", "data-group": s.group || "" }, kids);
       }
 
+      /* 연결 방식(cli/api)에 따라 보일 칸을 고른다.
+       *
+       * 이 화면이 아는 묶음은 cli 와 api 둘뿐이다. 예전에는 "cli 도 api 도 아닌
+       * 묶음" 을 전부 숨겼다. 그래서 settings_store 에 group 이 다른 설정을
+       * 더하면 (예: group="relay") 이 화면에 그려 넣어도 보이지 않았다.
+       * 지금은 아는 둘만 토글하고 나머지는 건드리지 않는다. 다른 묶음은
+       * 그것을 그리는 화면이 알아서 한다. (/admin/relay)
+       */
+      var KNOWN_GROUPS = ["cli", "api"];
+
       function applyGroupVisibility(provider) {
         var nodes = content.querySelectorAll(".field[data-group]");
         for (var i = 0; i < nodes.length; i++) {
           var g = nodes[i].getAttribute("data-group");
-          nodes[i].classList.toggle("hidden", g !== "" && g !== provider);
+          if (KNOWN_GROUPS.indexOf(g) < 0) { continue; }
+          nodes[i].classList.toggle("hidden", g !== provider);
         }
       }
 

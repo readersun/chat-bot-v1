@@ -46,6 +46,7 @@ from werkzeug.exceptions import HTTPException
 
 import admin as admin_module
 import admin_patch as admin_patch_module
+import admin_relay as admin_relay_module
 import auth
 import config
 import notes as notes_module
@@ -53,6 +54,8 @@ import patch as patch_module
 import patch_scan
 import permissions
 import providers
+import relay as relay_module
+import relay_store
 import settings_store
 from db import (
     audit, backup_database, close_db, connect, get_db, migrate, row_to_dict, ts,
@@ -101,6 +104,11 @@ app.register_blueprint(patch_module.bp)
 app.register_blueprint(patch_module.api)
 app.register_blueprint(admin_patch_module.bp)
 app.register_blueprint(admin_patch_module.api)
+app.register_blueprint(relay_module.bp)
+app.register_blueprint(relay_module.api)
+app.register_blueprint(relay_module.relay_api)
+app.register_blueprint(admin_relay_module.bp)
+app.register_blueprint(admin_relay_module.api)
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +385,21 @@ def session_payload(db, user, row):
     d["can_manage"] = permissions.can_manage_session(user, row)
     d["can_write"] = permissions.can_write_session(db, user, row)
     d["is_legacy"] = row["owner_id"] is None
+
+    # 대화 하나에 서버 하나. 붙은 서버가 없으면 server 는 None 이다.
+    # 서버가 지워졌거나 그 사람의 허용 범위에서 빠지면 이름은 보여 주되
+    # usable 을 false 로 내려 "고를 수는 없다" 를 화면이 알 수 있게 한다.
+    d["server"] = None
+    if "server_id" in keys and row["server_id"]:
+        srv = relay_store.get_server(db, row["server_id"])
+        if srv is not None:
+            d["server"] = {
+                "id": srv["id"], "name": srv["name"], "host": srv["host"],
+                "username": srv["username"],
+                "is_enabled": bool(srv["is_enabled"]),
+                "usable": (bool(srv["is_enabled"])
+                           and permissions.can_use_server(db, user, srv)),
+            }
     return d
 
 
@@ -392,6 +415,9 @@ def message_payload(db, session_id):
     for a in atts:
         by_msg.setdefault(a["message_id"], []).append(row_to_dict(a))
 
+    # 승인 카드. 챗봇이 고른 명령은 그 답 메시지에 붙어 있다.
+    cmds = relay_store.commands_for_messages(db, [m["id"] for m in msgs])
+
     out = []
     for m in msgs:
         d = row_to_dict(m)
@@ -399,6 +425,7 @@ def message_payload(db, session_id):
         username = d.pop("author_username", None)
         d["author_name"] = display or username
         d["attachments"] = by_msg.get(m["id"], [])
+        d["commands"] = cmds.get(m["id"], [])
         out.append(d)
     return out
 
@@ -413,6 +440,11 @@ PUBLIC_PATHS = ("/login", "/setup", "/health", "/sw.js", "/manifest.webmanifest"
 def before():
     auth.load_current_user()
     if request.path.startswith("/static/") or request.path in ("/health",):
+        return None
+    # 중계 프로그램의 API 는 쿠키를 쓰지 않고 X-Relay-Key 헤더로만 인증한다.
+    # 브라우저의 form 은 그 헤더를 붙일 수 없으므로 CSRF 로 공격할 대상이
+    # 아니고, 반대로 CSRF 토큰을 요구하면 중계가 로그인을 해야 한다.
+    if request.path.startswith(relay_module.NO_CSRF_PREFIX):
         return None
     auth.check_csrf()
     return None
@@ -729,6 +761,62 @@ def list_sessions(pid):
                    scope=scope)
 
 
+def resolve_server_id(db, user, raw):
+    """
+    대화에 붙일 서버를 확인한다. 반환: id 또는 None (서버 없이 쓰기)
+
+    화면에서 고른 것을 믿지 않는다. 질문마다 다시 보는 자리는 post_message 이고,
+    여기는 "붙일 때" 의 검사다. 둘 다 있어야 한다. 허용이 끊긴 뒤에도 그 대화가
+    계속 돌아가면 끊은 것이 아니다.
+    """
+    if raw in (None, "", 0, "0"):
+        return None
+    try:
+        server_id = int(raw)
+    except (TypeError, ValueError):
+        abort(400, "서버를 고르세요.")
+    permissions.require_menu(db, user, "servers")
+    row = relay_store.get_server(db, server_id)
+    permissions.require_server(db, user, row)
+    if not row["is_enabled"]:
+        abort(409, "꺼 둔 서버입니다. 관리자에게 문의하세요.")
+    return server_id
+
+
+def check_server_visibility(server_id, visibility):
+    """
+    서버에 붙은 대화는 공개로 둘 수 없다.
+
+    안에 서버 출력이 들어 있다. 공개 대화는 로그인한 사람 누구나 읽고 쓸 수
+    있으므로, 서버를 붙인 채 공개로 두면 허용받지 않은 사람이 그 서버의
+    출력을 읽고 그 대화에서 질문까지 할 수 있다.
+    """
+    if server_id and visibility == permissions.PUBLIC:
+        abort(400, "서버를 붙인 대화는 전체 공개로 둘 수 없습니다. "
+                   "안에 서버 출력이 들어 있습니다.")
+
+
+def _create_session_row(db, user, pid, data):
+    name = (data.get("name") or "").strip() or "새 대화"
+    visibility = (data.get("visibility") or permissions.PRIVATE).strip().lower()
+    if visibility not in permissions.VISIBILITIES:
+        abort(400, "공개 범위가 올바르지 않습니다.")
+    server_id = resolve_server_id(db, user, data.get("server_id"))
+    check_server_visibility(server_id, visibility)
+
+    now = ts()
+    cur = db.execute(
+        "INSERT INTO sessions (project_id, owner_id, name, visibility, claude_session_id,"
+        " server_id, created_at, updated_at) VALUES (?,?,?,?,NULL,?,?,?)",
+        (pid, user["id"], name[:200], visibility, server_id, now, now))
+    db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, pid))
+    if server_id:
+        audit(db, user["id"], "session_server_bound", "session", cur.lastrowid,
+              "server=%d" % server_id)
+    db.commit()
+    return get_session_row(db, cur.lastrowid)
+
+
 @app.post("/api/projects/<int:pid>/sessions")
 @auth.login_required
 @auth.menu_required("chat")
@@ -736,21 +824,43 @@ def create_session(pid):
     db = get_db()
     user = auth.current_user()
     get_project_or_404(db, pid)
+    row = _create_session_row(db, user, pid, request.get_json(silent=True) or {})
+    return jsonify(ok=True, session=session_payload(db, user, row)), 201
 
+
+@app.post("/api/sessions")
+@auth.login_required
+@auth.menu_required("chat")
+def create_session_anywhere():
+    """
+    프로젝트를 고르지 않고 대화를 만든다. 서버 목록에서 「채팅」을 눌렀을 때
+    쓰는 길이다. 그 화면에는 프로젝트라는 개념이 없다.
+
+    project_id 를 주지 않으면 최근에 쓴 프로젝트에 넣고, 그것도 없으면 가장
+    오래된 프로젝트에 넣는다. 프로젝트가 하나도 없으면 만들지 않고 409 다.
+    프로젝트를 만드는 것은 관리자의 일이고, 여기서 몰래 만들면 목록에 정체를
+    알 수 없는 프로젝트가 생긴다.
+    """
+    db = get_db()
+    user = auth.current_user()
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip() or "새 대화"
-    visibility = (data.get("visibility") or permissions.PRIVATE).strip().lower()
-    if visibility not in permissions.VISIBILITIES:
-        abort(400, "공개 범위가 올바르지 않습니다.")
 
-    now = ts()
-    cur = db.execute(
-        "INSERT INTO sessions (project_id, owner_id, name, visibility, claude_session_id,"
-        " created_at, updated_at) VALUES (?,?,?,?,NULL,?,?)",
-        (pid, user["id"], name[:200], visibility, now, now))
-    db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, pid))
-    db.commit()
-    row = get_session_row(db, cur.lastrowid)
+    pid = data.get("project_id")
+    if pid:
+        get_project_or_404(db, int(pid))
+    else:
+        row = db.execute(
+            "SELECT project_id FROM sessions WHERE owner_id = ?"
+            " ORDER BY updated_at DESC LIMIT 1", (user["id"],)).fetchone()
+        if row:
+            pid = row["project_id"]
+        else:
+            first = db.execute("SELECT id FROM projects ORDER BY id LIMIT 1").fetchone()
+            if first is None:
+                abort(409, "먼저 관리자가 프로젝트를 하나 만들어야 합니다.")
+            pid = first["id"]
+
+    row = _create_session_row(db, user, int(pid), data)
     return jsonify(ok=True, session=session_payload(db, user, row)), 201
 
 
@@ -776,6 +886,7 @@ def update_session(sid):
 
     data = request.get_json(silent=True) or {}
     fields, values, changed_visibility = [], [], None
+    changed_server = False
 
     if "name" in data:
         name = (data.get("name") or "").strip()
@@ -790,10 +901,23 @@ def update_session(sid):
         fields.append("visibility = ?")
         values.append(vis)
         changed_visibility = vis
+    new_server = None
+    if "server_id" in data:
+        # 대화 안에서 서버를 바꾼다. 바뀌는 것은 **그 다음 질문부터**다.
+        # 이미 받은 답은 어느 서버에서 나온 것인지 그대로 남는다. (고치지 않는다)
+        new_server = resolve_server_id(db, user, data.get("server_id"))
+        fields.append("server_id = ?")
+        values.append(new_server)
+        changed_server = True
     if data.get("reset_claude_session"):
         fields.append("claude_session_id = NULL")
     if not fields:
         abort(400, "변경할 내용이 없습니다.")
+
+    # 둘을 한 번에 바꿀 때도, 하나만 바꿀 때도 같은 규칙을 본다.
+    final_server = new_server if changed_server else row["server_id"]
+    final_vis = changed_visibility or row["visibility"]
+    check_server_visibility(final_server, final_vis)
 
     fields.append("updated_at = ?")
     values += [ts(), sid]
@@ -801,6 +925,9 @@ def update_session(sid):
     if changed_visibility:
         audit(db, user["id"], "session_visibility_changed", "session", sid,
               "to=%s" % changed_visibility)
+    if changed_server:
+        audit(db, user["id"], "session_server_changed", "session", sid,
+              "to=%s" % (final_server or "none"))
     db.commit()
     return jsonify(ok=True, session=session_payload(db, user, get_session_row(db, sid)))
 
@@ -862,6 +989,23 @@ def post_message(sid):
         text = data.get("message", "")
         files = []
 
+    # --- 서버가 붙은 대화라면 질문마다 다시 본다 ---------------------------
+    # 화면에서 고른 것을 믿지 않는다. 허용이 끊긴 뒤에도 그 대화가 계속
+    # 돌아가면 끊은 것이 아니다. 사용자 메시지를 저장하기 전에 본다.
+    server_row = None
+    if sess["server_id"]:
+        server_row = relay_store.get_server(db, sess["server_id"])
+        if server_row is None:
+            abort(409, "이 대화에 붙어 있던 서버가 목록에서 사라졌습니다. "
+                       "아래 서버 칩에서 다시 고르거나 '서버 없이 쓰기' 로 "
+                       "바꿔 주세요.")
+        if not server_row["is_enabled"]:
+            abort(409, "%s 서버는 지금 꺼져 있습니다. 다른 서버를 고르거나 "
+                       "'서버 없이 쓰기' 로 바꿔 주세요." % server_row["name"])
+        if not permissions.can_use_server(db, user, server_row):
+            abort(403, "%s 서버를 쓸 허용이 없습니다. 관리자에게 요청하거나 "
+                       "'서버 없이 쓰기' 로 바꿔 주세요." % server_row["name"])
+
     if not isinstance(text, str):
         abort(400, "잘못된 요청 형식입니다.")
     text = text.replace("\r\n", "\n").strip()
@@ -919,14 +1063,36 @@ def post_message(sid):
             started = time.time()
             images = [(s["original_name"], s["abs_path"], s["mime_type"]) for s in saved]
             author = user["display_name"] or user["username"]
-            ok, reply, mode = ask_claude(db, provider, sess, text, images,
+
+            # 서버가 붙은 대화에만 안내를 앞에 붙인다. 안 붙은 대화는 지금까지와
+            # 글자 하나도 다르지 않게 동작한다.
+            asked = text
+            if server_row is not None:
+                asked = relay_module.chat_prompt_prefix(
+                    db, server_row, permissions.ssh_level(db, user),
+                    relay_store.chat_max_commands(db)) + text
+
+            ok, reply, mode = ask_claude(db, provider, sess, asked, images,
                                          user_msg_id, author=author)
+
+            cmd_ids, cmd_note = [], None
+            if ok and server_row is not None:
+                def ask_again(prompt):
+                    r_ok, r_text, _mode = ask_claude(db, provider, sess, prompt, [],
+                                                     None, author=author)
+                    return r_ok, r_text
+
+                reply, cmd_ids, cmd_note = relay_module.handle_chat_reply(
+                    db, user, sess, reply, ask_again,
+                    deadline=started + config.RELAY_CHAT_BUDGET,
+                    claude_timeout=settings_store.get_int(db, "claude_timeout", 180))
             elapsed = round(time.time() - started, 2)
 
-            db.execute(
+            cur = db.execute(
                 "INSERT INTO messages (session_id, user_id, role, content, created_at) "
                 "VALUES (?,NULL,?,?,?)",
                 (sid, "assistant" if ok else "error", reply, ts()))
+            relay_module.attach_commands(db, cur.lastrowid, cmd_ids)
             touch_session(db, sid)
             db.commit()
         finally:
@@ -940,7 +1106,8 @@ def post_message(sid):
 
     messages = message_payload(db, sid)
     return jsonify(ok=ok, mode=mode, elapsed=elapsed,
-                   messages=messages[-2:], error=None if ok else reply)
+                   messages=messages[-2:], error=None if ok else reply,
+                   ssh=cmd_note)
 
 
 # ---------------------------------------------------------------------------
@@ -1023,6 +1190,7 @@ def startup():
     finally:
         conn.close()
     start_patch_scanner()
+    relay_module.start_housekeeping(app)
     return info, token
 
 
