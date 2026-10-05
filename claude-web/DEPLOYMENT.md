@@ -1,5 +1,7 @@
 # claude-web 운영 배포 가이드
 
+> 이 문서는 **venv + systemd** 로 올리는 방식이다. Docker 로 올린다면 [`DEPLOYMENT_DOCKER.md`](DEPLOYMENT_DOCKER.md) 를, 운영 서버 nfs-181 이라면 [`DEPLOYMENT_SERVER_NFS181.md`](DEPLOYMENT_SERVER_NFS181.md) 를 본다. 경로(`/opt/claude-web`)와 계정(`claudeweb`)이 여기와 다르다.
+
 아무것도 설치되어 있지 않은 **Ubuntu Server 22.04 / 24.04** 한 대에 처음부터
 설치하는 절차입니다. 위에서부터 순서대로 따라 하면 됩니다.
 

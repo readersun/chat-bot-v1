@@ -9,7 +9,12 @@ Docker 가 설치되어 있지 않은 상태를 전제로 하고, 위에서 아�
 이 문서는 **그 가이드를 이 서버에 적용하면서 실제로 부딪힌 것들**까지 포함한
 서버 고유의 기록이다. 두 문서가 다르면 **이 문서가 이 서버의 정답이다.**
 
-작성 기준: 2026-09-30, 실제 구축이 끝난 상태를 기록함
+> **주의.** 이 서버는 **Docker** 배포다. `DEPLOYMENT.md` 의
+> `/opt/claude-web`, `claudeweb` 계정, `venv/bin/pip`, `systemctl restart
+> claude-web` 은 **이 서버에 없다.** 그쪽은 venv + systemd 로 올리는 다른
+> 방식의 문서다. 이 서버에서는 아래 [18절](#18-평소-운영) 의 명령을 쓴다.
+
+작성 기준: 2026-09-30 구축, 2026-10-06 SSH 중계 반영
 
 ---
 
@@ -560,6 +565,13 @@ docker compose logs --tail=30 app | grep -i migrat
 # 소스만 바뀐 경우  -> 재빌드 없음
 git pull && docker compose restart app
 
+# SSH 중계(feat/ssh-relay) 반영 : requirements.txt 가 안 바뀌었으므로 재빌드 불필요.
+#   스키마 v9 마이그레이션은 기동할 때 자동으로 돌고, 먼저 backups/ 에 백업을 남긴다.
+#   cryptography 는 원래부터 requirements.txt 에 있어 이미 이미지 안에 있다.
+git pull && docker compose restart app
+docker compose logs --tail=50 app | grep -i 'migrate\|백업'
+docker compose exec app python -c "import cryptography; print(cryptography.__version__)"
+
 # requirements.txt 가 바뀐 경우 -> 재빌드 필요
 docker compose build app && docker compose up -d app
 
@@ -591,6 +603,7 @@ docker builder prune -f            # 빌드 캐시 회수 (수백 MB)
 | 메모 (텍스트) | `/home/claude-web-data/chat.db` | `notes` 테이블 |
 | 메모 첨부파일 | `/home/claude-web-data/notes/` | 메모 삭제 시 함께 삭제됨 |
 | Claude 작업 디렉터리 | `/home/claude-web-data/workspace/` | |
+| 중계 프로그램 (relay.exe) | `/home/claude-web-data/relay/` | 관리자가 올린 것 하나. git 에는 없다 |
 | 백업 | `/home/claude-web-data/backups/` | 10개 유지 |
 | Claude 인증 + 대화 기록 | Docker 볼륨 `claude-web-home` | `/var/lib/docker` 아래 = **`/` 에 있다** |
 | 이미지 / 빌드 캐시 | `/var/lib/docker` | **`/` 에 있다** |

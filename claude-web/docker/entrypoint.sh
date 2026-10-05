@@ -56,10 +56,13 @@ if [ "$(id -u)" = "0" ]; then
     uid="$(id -u "$APP_USER")"
     gid="$(id -g "$APP_USER")"
 
-    # DB / 업로드 / Claude working dir / 마이그레이션 백업.
-    # .env 의 DATABASE_PATH, UPLOAD_DIR, BACKUP_DIR, CLAUDE_WORKDIR 이 여기를 본다.
+    # DB / 업로드 / Claude working dir / 마이그레이션 백업 / 중계 프로그램.
+    # .env 의 DATABASE_PATH, UPLOAD_DIR, BACKUP_DIR, CLAUDE_WORKDIR, RELAY_DIR 이
+    # 여기를 본다.
     # workspace 는 관리자 화면이 "존재하는 디렉터리" 인지 검사하므로 미리 만든다.
-    for d in "$DATA_ROOT" "$DATA_ROOT/uploads" "$DATA_ROOT/notes" "$DATA_ROOT/workspace" "$DATA_ROOT/backups"; do
+    # relay 는 앱이 올릴 때 스스로 만들 수도 있지만, 나머지와 같은 자리에서 같은
+    # 소유자로 생기는 편이 맞다. 데이터 레이아웃이 기동 첫 순간부터 예측 가능해진다.
+    for d in "$DATA_ROOT" "$DATA_ROOT/uploads" "$DATA_ROOT/notes" "$DATA_ROOT/workspace" "$DATA_ROOT/backups" "$DATA_ROOT/relay"; do
         if [ ! -d "$d" ]; then
             log "mkdir $d"
             mkdir -p "$d"
