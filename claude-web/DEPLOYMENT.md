@@ -34,6 +34,7 @@
 | DB | `/var/lib/claude-web/chat.db` |
 | 채팅 첨부 이미지 | `/var/lib/claude-web/uploads/` |
 | 메모 첨부파일 | `/var/lib/claude-web/notes/` |
+| 중계 프로그램 (relay.exe) | `/var/lib/claude-web/relay/` |
 | Claude 작업 디렉터리 | `/var/lib/claude-web/workspace/` |
 | 서비스 계정 HOME | `/var/lib/claude-web/home` (Claude 인증정보가 여기 있음) |
 | 자동 백업 | `/var/lib/claude-web/backups/` |
@@ -139,7 +140,7 @@ sudo chown -R claudeweb:claudeweb /opt/claude-web-repo
 
 ```
 .env                  SECRET_KEY 가 들어 있다
-data/                 chat.db, uploads/, notes/, backups/, setup-token.txt
+data/                 chat.db, uploads/, notes/, relay/, backups/, setup-token.txt
 venv/ __pycache__/ *.pyc
 .credentials.json     Claude 인증정보
 claude-auth.env       CLAUDE_CODE_OAUTH_TOKEN
@@ -192,7 +193,7 @@ sudo -u claudeweb venv/bin/pip install -r requirements.txt
 | `Werkzeug` | 비밀번호 해시(`generate_password_hash`), 파일 응답. Flask 가 끌고 오지만 보안 업데이트를 직접 받으려고 명시 |
 | `python-dotenv` | `.env` 읽기 |
 | `gunicorn` | 운영 WSGI 서버 |
-| `cryptography` | 관리자 페이지에 저장하는 Claude API Key 암호화 |
+| `cryptography` | Claude API Key 와 **SSH 서버 비밀번호** 암호화. 이것이 없으면 SSH 서버의 비밀번호 저장이 `409` 로 거절된다(평문으로 넣지 않는다). 키 인증만 쓸 생각이어도 설치해 두는 편이 좋다 |
 
 개발 PC 에 있는 `pillow`, `requests` 는 **앱이 import 하지 않습니다.**
 테스트 도구용이라 서버에 설치하지 않습니다.

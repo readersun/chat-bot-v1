@@ -41,7 +41,8 @@ Python 패키지 / Claude CLI / OS 패키지가 바뀔 때만 이미지를 새�
   │      .env                            <- 서버 설정 + 이미지 태그      │
   │                                                                    │
   │  /var/lib/claude-web                 <- 데이터 (git 밖)             │
-  │      chat.db  chat.db-wal  uploads/  notes/  workspace/  backups/  │
+  │   chat.db  chat.db-wal  uploads/  notes/  relay/  workspace/       │
+  │   backups/                                                         │
   │                                                                    │
   │  docker volume claude-web-home       <- Claude 인증 / 세션 히스토리  │
   │                                                                    │
@@ -921,6 +922,7 @@ host 에서 `/var/lib/claude-web` 에 쓸 권한(root)도 필요 없다.
 |---|---|
 | `chat.db` | `python app.py backup` = sqlite **온라인 백업 API**. WAL 을 쓰므로 단순 `cp` 는 일관성이 보장되지 않는다. 직후 `PRAGMA integrity_check` 로 검증한다 |
 | `uploads/` | `uploads-<시각>.tar.gz` |
+| `relay/` | 백업하지 않아도 된다. 관리자가 `relay_agent/build.cmd` 로 다시 만들어 올리면 된다. 다만 올려 둔 파일이 없으면 쓰는 사람이 받을 자리가 비므로, 이사할 때는 함께 옮기는 편이 빠르다 |
 | `.env` | `env-<시각>.bak` (0600). **SECRET_KEY 가 들어 있다** |
 | Claude 인증 | **일부러 제외한다** (아래) |
 
