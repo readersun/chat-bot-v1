@@ -809,6 +809,58 @@ def has_data(conn):
     return False
 
 
+# v8 에서 처음 생긴 표들과, 그 표라면 반드시 있어야 하는 칸.
+#
+# 이름이 같은데 설계가 다른 표가 이미 있을 수 있다. 실제로 운영 서버에 예전
+# 설계의 relay_agents(token_hash / hosts_json / is_active ...)가 남아 있었다.
+# `CREATE TABLE IF NOT EXISTS` 는 그런 표를 건너뛰므로, 뒤이어 도는 ALTER 와
+# UPDATE 가 "no such column" 으로 깨진다.
+#
+# 여기 적는 칸은 **ALTER 로 나중에 더하는 칸이면 안 된다.** owner_id 는 v9 에서
+# ALTER 로 더하므로, 그것으로 판단하면 정상적인 v8 DB 까지 남의 표로 몰린다.
+FOREIGN_TABLE_MARKS = (
+    ("ssh_servers", ("secret_enc", "auth_kind")),
+    ("ssh_grants", ("server_id", "granted_at")),
+    ("ssh_commands", ("result_note", "level")),
+    ("relay_agents", ("key_hash", "registered_at")),
+    ("relay_enroll_codes", ("code_hash", "expires_at")),
+    ("relay_jobs", ("payload", "term_id")),
+    ("term_sessions", ("close_reason", "lines_in")),
+    ("term_inputs", ("line", "term_id")),
+)
+
+
+def move_foreign_tables_aside(conn, stamp):
+    """
+    설계가 다른 동명이표를 옆으로 비켜 둔다. 반환: 한 일 목록
+
+    **지우지 않는다.** 남의 설계라도 그 안에 무엇이 들어 있는지 우리는 모른다.
+    `<이름>_old_<시각>` 으로 이름만 바꿔 두고, 새 표는 그 뒤에 깨끗하게 만든다.
+    운영하는 사람이 내용을 확인한 뒤 직접 지우면 된다.
+
+    인덱스도 함께 떼어 낸다. 이름이 겹치면 `CREATE INDEX IF NOT EXISTS` 가
+    "이미 있네" 하고 건너뛰어, 새 표가 인덱스 없이 남는다. 인덱스를 지우는 것은
+    데이터를 지우는 것이 아니다.
+    """
+    done = []
+    for table, marks in FOREIGN_TABLE_MARKS:
+        if not table_exists(conn, table):
+            continue
+        cols = column_names(conn, table)
+        missing = [m for m in marks if m not in cols]
+        if not missing:
+            continue
+        for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+                " AND tbl_name = ? AND sql IS NOT NULL", (table,)).fetchall():
+            conn.execute('DROP INDEX "%s"' % row["name"])
+        moved = "%s_old_%s" % (table, stamp)
+        conn.execute('ALTER TABLE "%s" RENAME TO "%s"' % (table, moved))
+        done.append("예전 설계의 %s 를 %s 로 비켜 둠 (없는 칸: %s). 지우지 않았다"
+                    % (table, moved, ", ".join(missing)))
+    return done
+
+
 def migrate(verbose=True):
     """
     스키마를 최신 상태로 맞춘다. 반환: dict(applied, backup, steps)
@@ -848,6 +900,12 @@ def migrate(verbose=True):
             stmts = [x.strip() for x in SCHEMA.split(";") if x.strip()]
             creates = [x for x in stmts if not x.upper().lstrip().startswith("CREATE INDEX")]
             indexes = [x for x in stmts if x.upper().lstrip().startswith("CREATE INDEX")]
+
+            # 이름은 같은데 설계가 다른 표가 있으면 **먼저** 비켜 둔다.
+            # CREATE TABLE IF NOT EXISTS 는 그런 표를 건너뛰므로, 비켜 두지
+            # 않으면 아래 ALTER 와 UPDATE 가 없는 칸을 건드리다 깨진다.
+            for line in move_foreign_tables_aside(conn, time.strftime("%Y%m%d%H%M%S")):
+                steps.append(line)
 
             # --- v8 : user_menus 의 CHECK 제약에 'servers' 를 넣는다 ---------
             # 먼저 이름을 비켜 두면 아래 CREATE TABLE IF NOT EXISTS 가 새 제약으로

@@ -235,6 +235,25 @@ CREATE TABLE attachments (
 """
 
 
+LEGACY_RELAY = """
+-- 운영 서버에 남아 있던 예전 설계. 이름만 같고 칸이 전부 다르다.
+CREATE TABLE relay_agents (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL UNIQUE,
+    label        TEXT NOT NULL DEFAULT '',
+    token_hash   TEXT NOT NULL,
+    token_prefix TEXT NOT NULL DEFAULT '',
+    hosts_json   TEXT NOT NULL DEFAULT '[]',
+    client_version TEXT NOT NULL DEFAULT '',
+    is_active    INTEGER NOT NULL DEFAULT 1,
+    last_seen_at TEXT,
+    created_at   TEXT NOT NULL,
+    created_by   INTEGER
+);
+CREATE INDEX idx_relay_agents_owner ON relay_agents(is_active);
+"""
+
+
 class TestMigration(unittest.TestCase):
     """
     기존 DB 를 깨지 않는지 본다.
@@ -253,6 +272,107 @@ class TestMigration(unittest.TestCase):
     def tearDown(self):
         db_module.DATABASE_PATH = self._saved
         shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_foreign_table_with_the_same_name_is_moved_aside(self):
+        """
+        이름은 같은데 **설계가 다른** 표가 이미 있을 때.
+
+        운영 서버에서 실제로 났다. 그 DB 에는 예전 설계의 relay_agents 가
+        남아 있었다(token_hash / hosts_json / is_active). CREATE TABLE IF NOT
+        EXISTS 는 그 표를 건너뛰므로, 뒤이어 도는 ALTER 와 UPDATE 가
+        "no such column: revoked_at" 으로 깨지고 서버가 기동하지 못했다.
+
+        고친 뒤 기대하는 것
+          - 옛 표는 **지우지 않는다.** 이름만 비켜 둔다. 안에 무엇이 들어
+            있는지 우리는 모른다.
+          - 새 표는 제대로 만들어진다.
+          - 옛 인덱스가 이름을 붙잡고 있어서 새 인덱스가 안 생기는 일이 없다.
+        """
+        c = db_module.connect(self.path)
+        try:
+            c.executescript(V1_SCHEMA)
+            c.executescript(LEGACY_RELAY)
+            c.execute("INSERT INTO relay_agents (name, token_hash, created_at)"
+                      " VALUES ('VDI-OLD','deadbeef','2026-09-01 10:00:00')")
+            c.execute("PRAGMA user_version = 1")
+            c.commit()
+        finally:
+            c.close()
+
+        db_module.migrate(verbose=False)
+
+        c = db_module.connect(self.path)
+        try:
+            # 새 표가 제대로 섰다
+            cols = db_module.column_names(c, "relay_agents")
+            for want in ("key_hash", "owner_id", "revoked_at", "registered_at"):
+                self.assertIn(want, cols, want)
+
+            # 옛 표는 이름만 바뀐 채 **행까지 그대로** 있다
+            moved = [r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                " AND name LIKE 'relay_agents_old_%'")]
+            self.assertEqual(len(moved), 1, moved)
+            self.assertEqual(
+                c.execute('SELECT COUNT(*) FROM "%s"' % moved[0]).fetchone()[0], 1,
+                "비켜 둔 표의 내용이 사라졌다")
+            self.assertIn("token_hash", db_module.column_names(c, moved[0]))
+
+            # 새 인덱스가 옛 이름에 막히지 않았다
+            idx = {r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+                " AND tbl_name = 'relay_agents'")}
+            self.assertIn("idx_relay_agents_owner", idx, idx)
+
+            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], 9)
+            self.assertEqual(c.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(c.execute("PRAGMA foreign_key_check").fetchall(), [])
+        finally:
+            c.close()
+
+    def test_normal_v8_tables_are_not_mistaken_for_foreign(self):
+        """
+        **정상적인 v8 DB 를 남의 표로 몰면 안 된다.**
+
+        v8 의 relay_agents 에는 owner_id 가 없다. v9 가 ALTER 로 더한다.
+        없는 칸으로 판단하면 멀쩡한 운영 DB 의 중계 기록이 통째로 비켜나간다.
+        """
+        c = db_module.connect(self.path)
+        try:
+            c.executescript(V1_SCHEMA)
+            # v9 이전의 relay_agents : owner_id 만 없다
+            c.execute("CREATE TABLE relay_agents ("
+                      " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                      " key_hash TEXT NOT NULL UNIQUE,"
+                      " name TEXT NOT NULL DEFAULT '',"
+                      " version TEXT NOT NULL DEFAULT '',"
+                      " os_info TEXT NOT NULL DEFAULT '',"
+                      " ip TEXT NOT NULL DEFAULT '',"
+                      " scheme TEXT NOT NULL DEFAULT '',"
+                      " registered_at TEXT NOT NULL,"
+                      " last_seen_at TEXT, revoked_at TEXT, created_by INTEGER)")
+            c.execute("INSERT INTO relay_agents (key_hash, name, registered_at)"
+                      " VALUES ('abc','VDI-01','2026-09-01 10:00:00')")
+            c.execute("PRAGMA user_version = 8")
+            c.commit()
+        finally:
+            c.close()
+
+        db_module.migrate(verbose=False)
+
+        c = db_module.connect(self.path)
+        try:
+            moved = [r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                " AND name LIKE 'relay_agents_old_%'")]
+            self.assertEqual(moved, [], "멀쩡한 v8 표를 남의 표로 몰았다")
+            self.assertIn("owner_id", db_module.column_names(c, "relay_agents"))
+            row = c.execute("SELECT name, revoked_at FROM relay_agents").fetchone()
+            self.assertEqual(row["name"], "VDI-01", "기록이 사라졌다")
+            self.assertIsNotNone(row["revoked_at"],
+                                 "주인 없는 중계는 올라올 때 끊어야 한다")
+        finally:
+            c.close()
 
     def test_fresh(self):
         db_module.migrate(verbose=False)
