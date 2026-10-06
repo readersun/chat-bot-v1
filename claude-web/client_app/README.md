@@ -25,12 +25,13 @@ SSH 는 PuTTY 와 대상 서버의 sshd 사이에서 끝난다. claude-term · �
 |---|---|
 | 「셸 열기」 가 **웹 콘솔 + PuTTY 터널** | 관리자가 [운영] → [중계 설정] → [사용 허용] 에서 준다 |
 | 내 VDI 에서 돌고 있는 중계 (relay.exe 0.2.0 이상) | [서버] → [내 중계] |
-| 이 프로그램 (`claude-term.exe` + `putty.exe` 한 폴더) | [서버] → [내 클라이언트] → 「클라이언트 받기」 |
+| 이 프로그램 (`claude-term.exe` + `_internal` + `putty.exe` 한 폴더) | [서버] → [내 클라이언트] → 「클라이언트 받기」 |
 
 ## 2. 등록 (내 PC 에서 한 번)
 
-1. 받은 zip 을 아무 폴더에 푼다. `claude-term.exe` 와 `putty.exe` 가 **한 폴더**에
-   있어야 한다(하위 폴더는 보지 않는다).
+1. 받은 zip 을 아무 폴더에 푼다. `claude-term.exe` · `_internal` 폴더 · `putty.exe` 가
+   **한 폴더**에 있어야 한다(putty.exe 를 하위 폴더에서 찾지 않는다). 새 판은 같은
+   폴더에 덮어 풀면 된다. 등록은 그대로 남는다.
 2. [서버] → [내 클라이언트] → 「등록 코드 받기」. 10분 안에 쓴다.
 3. `claude-term.exe` 를 실행하고 챗봇 서버 주소와 등록 코드를 적는다.
 
@@ -104,8 +105,20 @@ putty.exe -ssh -P <로컬 포트> -l <계정> -loghost <서버 이름> 127.0.0.1
 ## 6. 만들기 (관리자가 한 번)
 
 인터넷이 되는 윈도우 PC 에서 `client_app\build.cmd` 를 실행한다.
-`dist\claude-term.exe` 와 `putty.exe` 를 **한 폴더에 넣고 그 둘만** zip 으로 묶어
+`dist\claude-term\` 폴더에 `putty.exe` 를 넣고, 그 폴더의 **내용물**
+(`claude-term.exe`, `_internal\`, `putty.exe`)을 zip 으로 묶어
 [운영] → [중계 설정] → [사용자 클라이언트] 에 올린다.
+
+1.1.1 부터 한 파일(`--onefile`)이 아니라 폴더(`--onedir`)로 묶는다. 한 파일은
+실행할 때마다 `%TEMP%\_MEI*` 에 풀었다가 끝날 때 지우는데, 백신이 그 파일을
+잡고 있으면 「Failed to remove temporary directory」 경고가 뜨고 시작도 느리다.
+
+## 7. 문제가 생기면
+
+`%LOCALAPPDATA%\claude-term\claude-term.log` 를 보낸다. 시작 · 탭 열기/닫기와
+그 이유 · 예외 · 파이썬 밖(Win32 · Tk)에서 죽은 경우의 마지막 스택이 남는다.
+키 · 비밀번호 · 화면 글자 · 질문 내용은 쓰지 않는다. 512KB 를 넘으면 한 벌만
+`.old` 로 남긴다.
 
 표준 라이브러리만 쓴다(tkinter, ctypes, urllib, http.client, socket). 파이썬이
 있는 PC 라면 `python claude_term.py` 로도 돈다.

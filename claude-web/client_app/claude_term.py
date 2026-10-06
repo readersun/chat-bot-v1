@@ -54,12 +54,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 APP_NAME = "Claude 터미널"
 
 APP_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "claude-term")
 CONFIG_PATH = os.path.join(APP_DIR, "client.json")
+LOG_PATH = os.path.join(APP_DIR, "claude-term.log")
+LOG_MAX_BYTES = 512 * 1024
 
 HTTP_TIMEOUT = 30
 CHAT_TIMEOUT = 330          # 서버 쪽 채팅 예산(240초)보다 넉넉하게
@@ -71,6 +73,65 @@ EMBED_SECONDS = 10          # PuTTY 창이 뜨기를 기다리는 시간. 넘으
 # 기본 8000자) 안에 질문까지 들어가야 하므로 글자 수도 자른다.
 SCREEN_LINES = 60
 SCREEN_MAX_CHARS = 6000
+
+
+# ---------------------------------------------------------------------------
+# 기록 (claude-term.log)
+#
+# 창 프로그램(--windowed)은 콘솔이 없어서, 죽어도 이유가 어디에도 남지 않는다.
+# 그래서 시작 · 탭 · 끊김 · 예외 · 네이티브 충돌(faulthandler)을 파일에 남긴다.
+# 키 · 비밀번호 · 화면 글자 · 질문 내용은 쓰지 않는다.
+# ---------------------------------------------------------------------------
+_log_file = None
+_log_lock = threading.Lock()
+
+
+def log(msg):
+    with _log_lock:
+        f = _log_file
+        if f is None:
+            return
+        try:
+            f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+            f.flush()
+        except (OSError, ValueError):
+            pass
+
+
+def start_log():
+    """기록을 연다. 커지면 한 벌만 .old 로 남긴다."""
+    global _log_file
+    try:
+        os.makedirs(APP_DIR, exist_ok=True)
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > LOG_MAX_BYTES:
+            old = LOG_PATH + ".old"
+            if os.path.exists(old):
+                os.remove(old)
+            os.rename(LOG_PATH, old)
+        _log_file = open(LOG_PATH, "a", encoding="utf-8")
+    except OSError:
+        _log_file = None
+        return
+    import faulthandler
+    import platform
+    try:
+        # 파이썬 밖(Win32 · Tk)에서 죽어도 마지막 스택이 남는다
+        faulthandler.enable(file=_log_file, all_threads=True)
+    except (RuntimeError, ValueError, OSError):
+        pass
+
+    def on_error(kind, exc_type, exc, tb):
+        import traceback
+        log("%s: %s" % (kind, "".join(
+            traceback.format_exception(exc_type, exc, tb)).rstrip()))
+
+    sys.excepthook = lambda t, e, tb: on_error("예외", t, e, tb)
+    threading.excepthook = lambda a: on_error(
+        "스레드 %s 예외" % getattr(a.thread, "name", "?"),
+        a.exc_type, a.exc_value, a.exc_traceback)
+    log("---- 시작 %s %s · Python %s · %s · %s" % (
+        APP_NAME, VERSION, platform.python_version(), platform.platform(),
+        sys.executable))
 
 
 # ---------------------------------------------------------------------------
@@ -708,22 +769,37 @@ class FocusBridge(object):
     def __init__(self, root):
         self.root = root
         self.hosts = {}                   # PuTTY hwnd -> 탭 칸(tk Frame)
-        self.hook = None
+        self.hooks = {}                   # PuTTY hwnd -> 훅 핸들
         self._cb = None
         w = w32()
         if w is None:
             return
         self._cb = w.WinEventProc(self._on_capture)
-        # EVENT_SYSTEM_CAPTURESTART, WINEVENT_OUTOFCONTEXT. 이 스레드의 메시지
-        # 루프(tkinter mainloop)에서 불린다.
-        self.hook = w.u.SetWinEventHook(0x0008, 0x0008, None, self._cb, 0, 0, 0)
         root.bind_all("<Button-1>", self._take_back, add="+")
 
-    def add(self, hwnd, host):
+    def add(self, hwnd, host, pid):
+        """
+        그 PuTTY 프로세스 하나만 본다. 시스템 전체를 보는 훅은 쓰지 않는다
+        (다른 프로그램의 마우스까지 이 프로그램을 지나게 되고, 백신이 키로거로 볼 수 있다).
+        """
         self.hosts[hwnd] = host
+        w = w32()
+        if w is None or self._cb is None or hwnd in self.hooks:
+            return
+        # EVENT_SYSTEM_CAPTURESTART, WINEVENT_OUTOFCONTEXT. 이 스레드의 메시지
+        # 루프(tkinter mainloop)에서 불린다.
+        h = w.u.SetWinEventHook(0x0008, 0x0008, None, self._cb, int(pid or 0) or 1, 0, 0)
+        if h:
+            self.hooks[hwnd] = h
+        else:
+            log("포커스 훅을 걸지 못함 (PuTTY pid %s)" % pid)
 
     def remove(self, hwnd):
         self.hosts.pop(hwnd, None)
+        h = self.hooks.pop(hwnd, None)
+        w = w32()
+        if h and w is not None:
+            w.u.UnhookWinEvent(h)
 
     def give(self, hwnd):
         host = self.hosts.get(hwnd)
@@ -739,18 +815,20 @@ class FocusBridge(object):
         set_focus(hwnd)
 
     def _on_capture(self, _hook, _ev, hwnd, _obj, _child, _tid, _t):
-        if hwnd in self.hosts:
-            self.give(hwnd)
+        # 콜백 안에서 난 예외는 ctypes 가 삼킨다. 그래도 기록은 남긴다.
+        try:
+            if hwnd in self.hosts:
+                self.give(hwnd)
+        except Exception as exc:          # noqa: BLE001
+            log("포커스 콜백 예외: %r" % (exc,))
 
     def _take_back(self, _e):
         if focused_window() in self.hosts:
             set_focus(toplevel_of(self.root.winfo_id()))
 
     def close(self):
-        w = w32()
-        if w is not None and self.hook:
-            w.u.UnhookWinEvent(self.hook)
-            self.hook = None
+        for hwnd in list(self.hooks):
+            self.remove(hwnd)
 
 
 # ---------------------------------------------------------------------------
@@ -881,6 +959,8 @@ class TunnelSession(object):
         except OSError as exc:
             self.finish("PuTTY 를 띄우지 못했습니다 (%s)" % exc, close_remote=True)
             return
+        log("터널 %s PuTTY 띄움 pid=%s port=%s" % (
+            self.id[:8], getattr(self.proc, "pid", None), self.port))
         self.app.events.put(("launched", self, None, None))
         try:
             conn, peer = self.listener.accept()
@@ -957,6 +1037,7 @@ class TunnelSession(object):
         if self.stop.is_set():
             return
         self.stop.set()
+        log("터널 %s 닫힘 (%s): %s" % (self.id[:8], self.server.get("name"), reason))
         self.state = "닫힘"
         self.reason = reason
         self.kill_putty()
@@ -1025,6 +1106,18 @@ def run_gui():
 
     dpi_aware()
     root = tk.Tk()
+
+    def report(exc_type, exc, tb):
+        import traceback
+        text = "".join(traceback.format_exception(exc_type, exc, tb)).rstrip()
+        log("화면 콜백 예외: %s" % text)
+        try:
+            app.events.put(("say", "오류가 났습니다. %s 를 보내 주세요. (%s)"
+                            % (LOG_PATH, exc), "warn", None))
+        except NameError:
+            pass
+
+    root.report_callback_exception = report
     root.title("%s %s" % (APP_NAME, VERSION))
     scale = max(1.0, root.winfo_fpixels("1i") / 96.0)
     # 화면보다 크게 열면 아래 입력칸이 작업 표시줄에 가린다
@@ -1613,9 +1706,10 @@ def run_gui():
             if tab is None or sess.stop.is_set():
                 return
             tab.hwnd = hwnd
+            log("탭 %s PuTTY 창 %s" % (tab.server["name"], hwnd or "못 찾음"))
             if hwnd and app.embed and embed_window(hwnd, tab.host.winfo_id()):
                 tab.embedded = True
-                focus.add(hwnd, tab.host)
+                focus.add(hwnd, tab.host, getattr(sess.proc, "pid", 0))
                 tab.show_body()
                 show_window(hwnd, 5)                              # SW_SHOW
                 root.update_idletasks()
@@ -2206,6 +2300,7 @@ def run_gui():
             fn()
 
     def on_close():
+        log("창을 닫음")
         close_all()
         focus.close()
         root.destroy()
@@ -2225,7 +2320,14 @@ def main(argv):
     if len(argv) > 1 and argv[1] == "--version":
         print(VERSION)
         return 0
-    run_gui()
+    start_log()
+    try:
+        run_gui()
+    except BaseException:
+        import traceback
+        log("run_gui 가 끝남: %s" % traceback.format_exc().rstrip())
+        raise
+    log("정상 종료")
     return 0
 
 

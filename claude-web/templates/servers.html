@@ -756,7 +756,7 @@ td.wide { white-space: normal; max-width: 280px; }
                 " · sha256 " + (prog.sha256 || "").slice(0, 16) + "…" }) : null
       ]),
       el("li", { text: /\.zip$/i.test(prog.name || "")
-          ? "내 PC 에서 압축을 풉니다. claude-term.exe 와 putty.exe 가 한 폴더에 있어야 합니다."
+          ? "내 PC 에서 압축을 풉니다. claude-term.exe · _internal · putty.exe 가 한 폴더에 있어야 합니다. 새 판은 같은 폴더에 덮어 풀면 됩니다."
           : "claude-term.exe 옆에 putty.exe 를 둡니다." }),
       el("li", {}, [
         el("button", { class: "btn sm", type: "button", onclick: issueClientCode },

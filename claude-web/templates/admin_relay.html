@@ -357,9 +357,9 @@ td.cmd {
       + "됩니다. 만드는 방법은 relay_agent/README.md 에 있습니다."));
     content.appendChild(programBlock("client", d.client_program, d.program_max_mb,
       "사용자 클라이언트 · 바깥 PC 에서 돈다",
-      "claude-term.exe 와 putty.exe 를 한 폴더에 담아 zip 으로 올립니다. 한 겹 더 "
-      + "싸지 말고 둘이 나란히 있어야 합니다(클라이언트는 자기 옆의 putty.exe 만 "
-      + "찾습니다). 「셸 열기」 가 「PuTTY 터널」 인 사람만 서버 화면에서 등록 코드를 "
+      "claude-term.exe · _internal 폴더 · putty.exe 를 한 폴더에 담아 zip 으로 올립니다. "
+      + "한 겹 더 싸지 말고 셋이 나란히 있어야 합니다(클라이언트는 자기 옆의 putty.exe 만 "
+      + "찾고, _internal 이 없으면 실행되지 않습니다). 「셸 열기」 가 「PuTTY 터널」 인 사람만 서버 화면에서 등록 코드를 "
       + "받을 수 있습니다. 만드는 방법은 client_app/README.md 에 있습니다."));
     return renderToday(d);
   }
