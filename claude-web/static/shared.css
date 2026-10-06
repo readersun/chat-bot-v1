@@ -577,3 +577,4 @@ td.wrap { white-space: normal; }
   overflow-wrap: anywhere;
 }
 #toast.on { display: block; }
+#toast.ok { background: var(--ok-bg); color: var(--ok-fg); }

@@ -384,9 +384,11 @@ td.wide { white-space: normal; max-width: 280px; }
   }
 
   var toastTimer = null;
-  function toast(msg) {
+  function toast(msg, kind) {
     var t = $("toast");
     t.textContent = msg;
+    // 기본은 오류(빨강). 잘 된 일은 "ok" 로 초록을 쓴다.
+    t.classList.toggle("ok", kind === "ok");
     t.classList.add("on");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { t.classList.remove("on"); }, 3200);
@@ -675,7 +677,7 @@ td.wide { white-space: normal; max-width: 280px; }
           confirmText: "끊기", danger: true }).then(function (yes) {
       if (!yes) { return null; }
       return api("POST", "/api/my-relay/revoke", {}).then(function () {
-        toast("내 중계를 끊었습니다.");
+        toast("내 중계를 끊었습니다.", "ok");
         return load(true);
       });
     }).catch(function (e) { toast(e.message); });
@@ -799,7 +801,7 @@ td.wide { white-space: normal; max-width: 280px; }
       if (!yes) { return null; }
       return api("POST", "/api/my-client/revoke", {}).then(function (d) {
         toast("등록을 해제했습니다." + (d.tunnels_closed
-          ? " 터널 " + d.tunnels_closed + "개가 닫혔습니다." : ""));
+          ? " 터널 " + d.tunnels_closed + "개가 닫혔습니다." : ""), "ok");
         state.clientSig = null;
         return loadMyClient();
       });
@@ -930,7 +932,7 @@ td.wide { white-space: normal; max-width: 280px; }
     $("btn-save").disabled = true;
     p.then(function (d) {
       closeServerDialog();
-      toast("저장했습니다.");
+      toast("저장했습니다.", "ok");
       /* 방금 한 테스트는 **입력칸의 값**으로 한 것이다. 저장된 뒤에는 암호화해
          넣어 둔 값으로 붙는다. 둘이 같다는 보장을 화면이 대신 말하면 안 되므로,
          저장한 그 서버로 한 번 더 확인해서 「마지막 확인」을 채운다. */

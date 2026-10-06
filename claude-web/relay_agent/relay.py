@@ -53,7 +53,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 APP_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "claude-relay")
@@ -535,7 +535,10 @@ def run_test(auth, timeout=20):
 
     why = _error_line(dbg) or _error_line(out) or "붙지 못했습니다"
     if "host key" in (dbg + out).lower() and auth.get("kind") == "password":
-        why += " (VDI 에서 plink -ssh %s 를 한 번 실행해 호스트 키를 받아 두세요)" % who
+        port = int(auth.get("port") or 22)
+        # 22 가 아니면 -P 가 있어야 같은 호스트 키 칸에 저장된다
+        cmd = "plink -ssh %s%s" % ("-P %d " % port if port != 22 else "", who)
+        why += " (VDI 에서 %s 를 한 번 실행해 호스트 키를 받아 두세요)" % cmd
     return {"ok": False, "message": "연결 실패 · " + why, "banner": banner,
             "elapsed": elapsed, "error": why}
 

@@ -1279,6 +1279,11 @@ def relay_poll():
     db = get_db()
     agent = _agent_or_401(db)
     store.touch_agent(db, agent["id"], auth.client_ip(), _client_scheme())
+    # 새 판으로 바꿔 끼워도 등록을 다시 하지 않으므로, 판 번호는 여기서 맞춘다.
+    m = re.match(r"claude-relay/(\d+\.\d+\.\d+)$", request.headers.get("User-Agent") or "")
+    if m and m.group(1) != agent["version"]:
+        db.execute("UPDATE relay_agents SET version = ? WHERE id = ?",
+                   (m.group(1), agent["id"]))
     db.commit()
 
     wait_until = time.time() + store.poll_seconds(db)

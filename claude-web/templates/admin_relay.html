@@ -294,6 +294,7 @@ td.cmd {
 
   function renderConnect(d) {
     clear(content);
+    editing = false;
 
     if (d.insecure_warning) { notify(d.insecure_warning, "warn"); }
 
@@ -816,9 +817,20 @@ td.cmd {
     content.appendChild(el("div", { class: "alert error", text: e.message }));
   });
 
-  /* 연결 상태는 사람이 새로고침하지 않아도 바뀐다. 이 탭에서만 다시 본다. */
+  /* 연결 상태는 사람이 새로고침하지 않아도 바뀐다. 이 탭에서만 다시 본다.
+     단, 누가 설정을 고치거나 파일을 고르는 중이면 다시 그리지 않는다. 다시 그리면
+     고치던 값과 고른 파일이 사라지고 화면이 맨 위로 튄다. (저장하면 다시 그린다) */
+  var editing = false;
+  content.addEventListener("input", function () { editing = true; });
+  content.addEventListener("change", function () { editing = true; });
   if (TAB === "connect") {
-    setInterval(function () { load().catch(function () {}); }, 15000);
+    setInterval(function () {
+      var a = document.activeElement;
+      var busy = a && content.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName);
+      if (editing || busy || document.querySelector(".overlay .modal")) { return; }
+      var y = window.scrollY;
+      load().then(function () { window.scrollTo(0, y); }).catch(function () {});
+    }, 15000);
   }
 })();
 </script>

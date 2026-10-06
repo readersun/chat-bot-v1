@@ -54,7 +54,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 APP_NAME = "Claude 터미널"
 
 APP_DIR = os.path.join(
@@ -460,6 +460,19 @@ def compose_question(question, shot=None):
         SCREEN_HEAD % (shot["name"], shot["at"], shot["lines"]), body, question)
 
 
+def plain(text):
+    """
+    답의 마크다운 표시(**굵게**, ``` 울타리)를 지운다. 이 창은 마크다운을 그리지
+    않으므로 그대로 두면 기호가 글자로 보인다. 내용은 바꾸지 않는다.
+    """
+    out = []
+    for line in (text or "").split("\n"):
+        if re.match(r"^\s*```[\w-]*\s*$", line):
+            continue
+        out.append(line.replace("**", ""))
+    return "\n".join(out)
+
+
 def split_screen(content):
     """compose_question 의 반대. 대화에 다시 그릴 때 화면 전체 대신 칩만 보인다."""
     m = _SCREEN_RE.match(content or "")
@@ -832,7 +845,9 @@ class FocusBridge(object):
         if w is None:
             return
         self._cb = w.WinEventProc(self._on_capture)
+        self.pending = None               # 훅이 남긴 "이 PuTTY 를 눌렀다"
         root.bind_all("<Button-1>", self._take_back, add="+")
+        root.after(40, self._poll)
 
     def add(self, hwnd, host, pid):
         """
@@ -872,12 +887,28 @@ class FocusBridge(object):
         set_focus(hwnd)
 
     def _on_capture(self, _hook, _ev, hwnd, _obj, _child, _tid, _t):
-        # 콜백 안에서 난 예외는 ctypes 가 삼킨다. 그래도 기록은 남긴다.
+        """
+        **여기서 tkinter 를 부르면 안 된다.** 이 콜백은 Tk 가 윈도우 메시지를 꺼내는
+        도중(파이썬 GIL 을 놓은 채)에 불린다. 그 안에서 tkinter 를 부르면 파이썬이
+        「PyEval_RestoreThread ... GIL is released」 로 즉시 죽는다 — 1.1.0~1.1.2 가
+        PuTTY 를 누르는 순간 꺼지던 원인이다. Win32 로 포커스만 주고, tkinter 쪽
+        일은 _poll 이 Tk 의 차례에서 한다.
+        """
+        if hwnd in self.hosts:
+            set_focus(hwnd)
+            self.pending = hwnd
+
+    def _poll(self):
         try:
-            if hwnd in self.hosts:
-                self.give(hwnd)
+            h, self.pending = self.pending, None
+            if h is not None:
+                self.give(h)
         except Exception as exc:          # noqa: BLE001
-            log("포커스 콜백 예외: %r" % (exc,))
+            log("포커스 넘기기 실패: %r" % (exc,))
+        try:
+            self.root.after(40, self._poll)
+        except Exception:                  # noqa: BLE001 - 창이 닫히는 중
+            pass
 
     def _take_back(self, _e):
         if focused_window() in self.hosts:
@@ -1273,8 +1304,9 @@ def run_gui():
                  "2   등록하면 키가 %s 에 저장됩니다. 대상 서버 비밀번호는 저장하지 않습니다.\n"
                  "3   putty.exe 는 이 프로그램과 같은 폴더에 있어야 합니다. 지금: %s"
                  % (CONFIG_PATH, putty_path(state["cfg"]) or "없음"))
-        tk.Label(f, text=notes, bg=GROUND, fg=MUTED, justify="left").pack(
-            anchor="w", pady=(18, 0))
+        # 경로가 길면 창보다 넓어져 왼쪽이 잘렸다. 줄을 접는다.
+        tk.Label(f, text=notes, bg=GROUND, fg=MUTED, justify="left", anchor="w",
+                 wraplength=int(1000 * scale)).pack(anchor="w", fill="x", pady=(18, 0))
 
         def do_register():
             u = url.get().strip()
@@ -1382,8 +1414,8 @@ def run_gui():
                  wraplength=int(180 * scale)).pack(side="bottom", anchor="w", padx=18,
                                                     pady=14)
         why_lbl = tk.Label(left, text="", font=F_S, bg=SIDE, fg=WARN, justify="left",
-                           wraplength=int(180 * scale))
-        why_lbl.pack(side="bottom", anchor="w", padx=18)
+                           anchor="w", wraplength=int(176 * scale))
+        why_lbl.pack(side="bottom", anchor="w", fill="x", padx=18)
 
         # ── 오른쪽: Claude (C-3) ──
         right = tk.Frame(body, bg=PAPER, width=int(380 * scale))
@@ -1921,7 +1953,13 @@ def run_gui():
                 target_box.set("")
 
         def render_hint():
-            if ask.get("1.0", "end").strip() or root.focus_get() is ask:
+            try:
+                focused = root.focus_get()
+            except (KeyError, tk.TclError):
+                # 「대상」 콤보상자가 펼쳐져 있으면 tkinter 가 그 안쪽 이름(popdown)을
+                # 몰라 KeyError 를 낸다 (tkinter 의 알려진 버그)
+                focused = None
+            if ask.get("1.0", "end").strip() or focused is ask:
                 hint.place_forget()
                 return
             s = server_by_id(app.target) if app.target else None
@@ -2057,10 +2095,10 @@ def run_gui():
                     write(rest.strip() + "\n", "me")
                     continue
                 if m["role"] == "error":
-                    write("\n" + m["content"] + "\n", "warn")
+                    write("\n" + plain(m["content"]) + "\n", "warn")
                     continue
                 write("\nClaude\n", "bot_h")
-                write(m["content"].strip() + "\n", "bot")
+                write(plain(m["content"]).strip() + "\n", "bot")
                 for c in m.get("commands") or []:
                     if c["state"] == "pending":
                         card(c, app.target)
@@ -2297,6 +2335,13 @@ def run_gui():
                                      kwargs={"close_remote": True}, daemon=True).start()
                 t.paint()
             render_counts()
+            # 승인 카드가 남아 있으면 대화를 다시 받는다. 남은 시간이 줄고, 시간이
+            # 지나 취소된 카드가 「승인 대기」 로 남아 있지 않게 한다.
+            sid = app.target
+            if sid is not None and sid not in app.busy and any(
+                    c.get("state") == "pending"
+                    for m in app.messages.get(sid) or [] for c in m.get("commands") or []):
+                load_chat(sid)
             root.after(5000, tick)
 
         def watch_dialogs():
@@ -2326,6 +2371,8 @@ def run_gui():
                             "앞에 뜬 창에서 고르세요." % t.server["name"], "warn")
                     elif not now and t.dialog:
                         # 대답했다 → 탭을 다시 그리고 PuTTY 에 키보드를 준다
+                        say("%s · 확인했습니다. 탭 안의 PuTTY 에서 비밀번호를 치세요"
+                            % t.server["name"])
                         t.fit()
                         if app.active is t and t.embedded and t.hwnd:
                             focus.give(t.hwnd)
