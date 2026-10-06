@@ -13,19 +13,25 @@ claude-term - 바깥 PC 에서 진짜 PuTTY 로 사내 서버에 붙는 클라�
 
     1. 서버 고르기   웹에서 관리자가 등록한 서버 중 내가 쓸 수 있는 것만 보인다
     2. 터널 쥐기     127.0.0.1 에 포트를 하나 열고 바이트를 챗봇 서버로 옮긴다
-    3. PuTTY 띄우기  그 포트로 붙는 putty.exe 를 띄운다. 터미널은 PuTTY 가 그린다
-    4. Claude 패널   웹 채팅과 같은 대화. claude -p 는 챗봇 서버에서 돈다
+    3. 탭 안의 PuTTY 그 포트로 붙는 putty.exe 를 띄워 **탭 안에 넣는다**
+                     (Win32 SetParent. MTPuTTY · SuperPuTTY 와 같은 방법).
+                     넣지 못하면 별도 창으로 둔다. 터미널은 PuTTY 가 그린다
+    4. Claude 패널   하나의 패널이 「대상」 으로 서버를 고른다. 대화는 서버마다
+                     하나이고 웹과 같은 대화다. claude -p 는 챗봇 서버에서 돈다
 
 이 프로그램이 하지 않는 일
 
-    - 대상 서버의 비밀번호를 묻거나 저장하지 않는다. PuTTY 창에서 직접 친다
+    - 대상 서버의 비밀번호를 묻거나 저장하지 않는다. 탭 안의 PuTTY 에 직접 친다
     - SSH 를 하지 않는다. 바이트만 옮긴다(암호문이라 읽을 수도 없다)
     - Claude 가 PuTTY 에 대신 타이핑하지 않는다. 명령은 클립보드까지만 간다
     - 0.0.0.0 에 포트를 열지 않는다. 127.0.0.1 만, 연결 하나만 받는다
+    - PuTTY 화면을 몰래 읽지 않는다. 「이 화면을 Claude 에게」 를 누를 때만
+      PuTTY 의 「Copy All to Clipboard」 로 글자를 받고, 클립보드는 되돌린다.
+      세션 로그 파일을 켜지 않는다
 
 의존성
 ------
-표준 라이브러리만 쓴다 (tkinter, urllib, http.client, socket, threading).
+표준 라이브러리만 쓴다 (tkinter, ctypes, urllib, http.client, socket, threading).
 putty.exe 는 이 프로그램과 **같은 폴더**에 둔다.
 
     pyinstaller --onefile --windowed --name claude-term claude_term.py
@@ -36,17 +42,19 @@ import http.client
 import json
 import os
 import queue
+import re
 import socket
 import ssl
 import subprocess
 import sys
 import threading
 import time
+import types
 import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 APP_NAME = "Claude 터미널"
 
 APP_DIR = os.path.join(
@@ -57,6 +65,12 @@ HTTP_TIMEOUT = 30
 CHAT_TIMEOUT = 330          # 서버 쪽 채팅 예산(240초)보다 넉넉하게
 REFRESH_SECONDS = 10
 ACCEPT_SECONDS = 60         # PuTTY 가 붙기를 기다리는 시간
+EMBED_SECONDS = 10          # PuTTY 창이 뜨기를 기다리는 시간. 넘으면 별도 창으로 둔다
+
+# 「이 화면을 Claude 에게」 가 붙이는 양. 서버의 질문 길이 상한(MAX_INPUT_CHARS,
+# 기본 8000자) 안에 질문까지 들어가야 하므로 글자 수도 자른다.
+SCREEN_LINES = 60
+SCREEN_MAX_CHARS = 6000
 
 
 # ---------------------------------------------------------------------------
@@ -343,15 +357,412 @@ def local_port_for(server_id):
     return 40000 + (int(server_id) % 20000)
 
 
+
+# ---------------------------------------------------------------------------
+# 「이 화면을 Claude 에게」 가 붙이는 글자
+# ---------------------------------------------------------------------------
+def screen_tail(text, lines=SCREEN_LINES, max_chars=SCREEN_MAX_CHARS):
+    """
+    PuTTY 의 Copy All 결과에서 마지막 화면만 남긴다. (글자, 줄 수)
+
+    Copy All 은 스크롤백 전체를 준다. 제어문자를 지우고, 커서 아래의 빈 줄을
+    버리고, 마지막 lines 줄만 남긴다. 그래도 길면 위에서부터 줄을 뺀다.
+    """
+    rows = []
+    for raw in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        clean = "".join(ch for ch in raw
+                        if ch == "\t" or (ord(ch) >= 32 and not 127 <= ord(ch) < 160))
+        rows.append(clean.rstrip())
+    while rows and not rows[-1]:
+        rows.pop()
+    rows = rows[-lines:]
+    while rows and not rows[0]:
+        rows.pop(0)
+    while rows and len("\n".join(rows)) > max_chars:
+        rows.pop(0)
+    return "\n".join(rows), len(rows)
+
+
+SCREEN_HEAD = "[%s 화면 · %s · 마지막 %d줄]"
+_SCREEN_RE = re.compile(r"^\[(.+?) 화면 · (.+?) · 마지막 (\d+)줄\]\n```\n.*?\n```\n\n", re.S)
+
+
+def compose_question(question, shot=None):
+    """
+    질문 앞에 화면을 붙인다. 언어 표시 없는 블록으로 감싸므로 챗봇은 이것을
+    명령으로 실행하지 않는다. 화면 안의 ``` 는 블록을 깨므로 바꿔 둔다.
+    """
+    if not shot:
+        return question
+    body = shot["text"].replace("```", "'''")
+    return "%s\n```\n%s\n```\n\n%s" % (
+        SCREEN_HEAD % (shot["name"], shot["at"], shot["lines"]), body, question)
+
+
+def split_screen(content):
+    """compose_question 의 반대. 대화에 다시 그릴 때 화면 전체 대신 칩만 보인다."""
+    m = _SCREEN_RE.match(content or "")
+    if not m:
+        return None, content
+    return ({"name": m.group(1), "at": m.group(2), "lines": int(m.group(3))},
+            content[m.end():])
+
+
+# ---------------------------------------------------------------------------
+# Win32 — PuTTY 를 탭 안에 넣기, Copy All, 클립보드
+#
+# PuTTY 0.85 에서 확인한 것:
+#   - 창 클래스 이름은 "PuTTY". 띄울 때 SW_HIDE 를 주면 숨긴 채로 뜬다
+#   - 제목줄 스타일을 지워도 PuTTY 가 다시 붙인다. 그래서 지우지 않고, 창을
+#     제목줄 높이만큼 위로 올려 탭 칸이 잘라 내게 둔다
+#   - 다른 프로세스의 창을 자식으로 넣으면 클릭해도 키보드가 오지 않는다.
+#     PuTTY 가 마우스를 잡는 순간(EVENT_SYSTEM_CAPTURESTART)에 포커스를 준다
+#   - 시스템 메뉴의 「Copy All to Clipboard」 는 0x170 이다. 메뉴 글자로 먼저 찾는다
+# ---------------------------------------------------------------------------
+IDM_COPYALL = 0x0170
+_W = None
+
+
+def w32():
+    """윈도우가 아니면 None. 그때는 PuTTY 를 별도 창으로만 띄운다."""
+    global _W
+    if _W is not None or os.name != "nt":
+        return _W
+    import ctypes
+    from ctypes import wintypes as wt
+    u = ctypes.WinDLL("user32", use_last_error=True)
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    H = wt.HWND
+    for name, res, args in (
+            ("GetWindowLongPtrW", ctypes.c_ssize_t, [H, ctypes.c_int]),
+            ("SetWindowLongPtrW", ctypes.c_ssize_t, [H, ctypes.c_int, ctypes.c_ssize_t]),
+            ("SetParent", H, [H, H]),
+            ("GetParent", H, [H]),
+            ("SetWindowPos", wt.BOOL, [H, H, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                       ctypes.c_int, wt.UINT]),
+            ("ShowWindow", wt.BOOL, [H, ctypes.c_int]),
+            ("IsWindow", wt.BOOL, [H]),
+            ("SetFocus", H, [H]),
+            ("GetFocus", H, []),
+            ("GetAncestor", H, [H, wt.UINT]),
+            ("SetForegroundWindow", wt.BOOL, [H]),
+            ("GetWindowRect", wt.BOOL, [H, ctypes.c_void_p]),
+            ("ClientToScreen", wt.BOOL, [H, ctypes.c_void_p]),
+            ("GetClassNameW", ctypes.c_int, [H, wt.LPWSTR, ctypes.c_int]),
+            ("GetWindowThreadProcessId", wt.DWORD, [H, ctypes.POINTER(wt.DWORD)]),
+            ("GetSystemMenu", wt.HMENU, [H, wt.BOOL]),
+            ("GetMenuItemCount", ctypes.c_int, [wt.HMENU]),
+            ("GetMenuItemID", wt.UINT, [wt.HMENU, ctypes.c_int]),
+            ("GetMenuStringW", ctypes.c_int, [wt.HMENU, wt.UINT, wt.LPWSTR, ctypes.c_int,
+                                              wt.UINT]),
+            ("SendMessageTimeoutW", ctypes.c_ssize_t,
+             [H, wt.UINT, wt.WPARAM, wt.LPARAM, wt.UINT, wt.UINT,
+              ctypes.POINTER(ctypes.c_size_t)]),
+            ("OpenClipboard", wt.BOOL, [H]),
+            ("CloseClipboard", wt.BOOL, []),
+            ("EmptyClipboard", wt.BOOL, []),
+            ("GetClipboardData", wt.HANDLE, [wt.UINT]),
+            ("SetClipboardData", wt.HANDLE, [wt.UINT, wt.HANDLE]),
+            ("IsClipboardFormatAvailable", wt.BOOL, [wt.UINT]),
+            ("CountClipboardFormats", ctypes.c_int, []),
+            ("GetClipboardSequenceNumber", wt.DWORD, [])):
+        f = getattr(u, name)
+        f.restype = res
+        f.argtypes = args
+    k.GlobalAlloc.restype = wt.HANDLE
+    k.GlobalAlloc.argtypes = [wt.UINT, ctypes.c_size_t]
+    k.GlobalLock.restype = ctypes.c_void_p
+    k.GlobalLock.argtypes = [wt.HANDLE]
+    k.GlobalUnlock.argtypes = [wt.HANDLE]
+    WinEventProc = ctypes.WINFUNCTYPE(None, wt.HANDLE, wt.DWORD, H, ctypes.c_long,
+                                      ctypes.c_long, wt.DWORD, wt.DWORD)
+    u.SetWinEventHook.restype = wt.HANDLE
+    u.SetWinEventHook.argtypes = [wt.DWORD, wt.DWORD, wt.HMODULE, WinEventProc,
+                                  wt.DWORD, wt.DWORD, wt.DWORD]
+    u.UnhookWinEvent.argtypes = [wt.HANDLE]
+
+    class RECT(ctypes.Structure):
+        _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long),
+                    ("r", ctypes.c_long), ("b", ctypes.c_long)]
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    _W = types.SimpleNamespace(
+        ctypes=ctypes, wt=wt, u=u, k=k, RECT=RECT, POINT=POINT,
+        EnumProc=ctypes.WINFUNCTYPE(wt.BOOL, H, wt.LPARAM), WinEventProc=WinEventProc)
+    return _W
+
+
+def dpi_aware():
+    """
+    화면 배율(125% 등)에서 PuTTY 는 스스로 배율을 안다. 이 프로그램이 모르면
+    윈도우가 이 창만 늘려 그려서, 그 안에 넣은 PuTTY 의 자리가 어긋난다.
+    """
+    if os.name != "nt":
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
+def find_putty_window(pid):
+    """그 PID 의 PuTTY 주 창. 숨겨 띄웠으므로 보이는지는 따지지 않는다."""
+    w = w32()
+    if w is None:
+        return None
+    found = []
+
+    def cb(hwnd, _l):
+        p = w.wt.DWORD()
+        w.u.GetWindowThreadProcessId(hwnd, w.ctypes.byref(p))
+        if p.value == pid:
+            buf = w.ctypes.create_unicode_buffer(64)
+            w.u.GetClassNameW(hwnd, buf, 64)
+            if buf.value == "PuTTY":
+                found.append(hwnd)
+                return False
+        return True
+
+    w.u.EnumWindows(w.EnumProc(cb), 0)
+    return found[0] if found else None
+
+
+def embed_window(hwnd, parent):
+    """PuTTY 창을 parent(탭 칸)의 자식으로 넣는다. 실패하면 False."""
+    w = w32()
+    if w is None or not w.u.IsWindow(hwnd):
+        return False
+    style = w.u.GetWindowLongPtrW(hwnd, -16)                      # GWL_STYLE
+    style = (style & ~0x80000000) | 0x40000000                    # -WS_POPUP +WS_CHILD
+    w.u.SetWindowLongPtrW(hwnd, -16, style)
+    if not w.u.SetParent(hwnd, parent):
+        return False
+    return w.u.GetParent(hwnd) == parent
+
+
+def fit_window(hwnd, width, height):
+    """
+    탭 칸을 꽉 채운다. 제목줄과 테두리는 칸 바깥으로 밀어 잘리게 한다.
+    오른쪽 스크롤바는 남긴다(테두리만큼만 넓힌다).
+    """
+    w = w32()
+    if w is None or not hwnd or not w.u.IsWindow(hwnd):
+        return
+    wr = w.RECT()
+    w.u.GetWindowRect(hwnd, w.ctypes.byref(wr))
+    p = w.POINT(0, 0)
+    w.u.ClientToScreen(hwnd, w.ctypes.byref(p))
+    left, top = max(0, p.x - wr.l), max(0, p.y - wr.t)
+    # SWP_NOZORDER | SWP_NOACTIVATE
+    w.u.SetWindowPos(hwnd, None, -left, -top, max(1, width + 2 * left),
+                     max(1, height + top + left), 0x0004 | 0x0010)
+
+
+def release_window(hwnd):
+    """탭 칸을 지우기 전에 PuTTY 창을 떼어 숨긴다. 칸과 함께 지워지게 두지 않는다."""
+    w = w32()
+    if w is None or not hwnd or not w.u.IsWindow(hwnd):
+        return
+    w.u.ShowWindow(hwnd, 0)                                       # SW_HIDE
+    w.u.SetParent(hwnd, None)
+
+
+def show_window(hwnd, how):
+    w = w32()
+    if w is not None and hwnd:
+        w.u.ShowWindow(hwnd, how)
+
+
+def bring_front(hwnd):
+    w = w32()
+    if w is not None and hwnd and w.u.IsWindow(hwnd):
+        w.u.ShowWindow(hwnd, 9)                                   # SW_RESTORE
+        w.u.SetForegroundWindow(hwnd)
+
+
+def focused_window():
+    w = w32()
+    return w.u.GetFocus() if w is not None else None
+
+
+def set_focus(hwnd):
+    w = w32()
+    if w is not None and hwnd and w.u.IsWindow(hwnd):
+        w.u.SetFocus(hwnd)
+
+
+def toplevel_of(hwnd):
+    w = w32()
+    return w.u.GetAncestor(hwnd, 2) if w is not None else None    # GA_ROOT
+
+
+def _clip_open():
+    w = w32()
+    for _ in range(25):
+        if w.u.OpenClipboard(None):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def clip_get():
+    """클립보드의 글자. 글자가 없으면 None."""
+    w = w32()
+    if w is None or not w.u.IsClipboardFormatAvailable(13) or not _clip_open():
+        return None
+    try:
+        h = w.u.GetClipboardData(13)                              # CF_UNICODETEXT
+        if not h:
+            return None
+        p = w.k.GlobalLock(h)
+        if not p:
+            return None
+        try:
+            return w.ctypes.wstring_at(p)
+        finally:
+            w.k.GlobalUnlock(h)
+    finally:
+        w.u.CloseClipboard()
+
+
+def clip_set(text):
+    """클립보드를 text 로. None 이면 비운다."""
+    w = w32()
+    if w is None or not _clip_open():
+        return False
+    try:
+        w.u.EmptyClipboard()
+        if text is None:
+            return True
+        data = w.ctypes.create_unicode_buffer(text)
+        h = w.k.GlobalAlloc(0x0002, w.ctypes.sizeof(data))       # GMEM_MOVEABLE
+        p = w.k.GlobalLock(h)
+        w.ctypes.memmove(p, data, w.ctypes.sizeof(data))
+        w.k.GlobalUnlock(h)
+        return bool(w.u.SetClipboardData(13, h))
+    finally:
+        w.u.CloseClipboard()
+
+
+def copy_all_id(hwnd):
+    """시스템 메뉴에서 「Copy All to Clipboard」 를 글자로 찾는다. 못 찾으면 0x170."""
+    w = w32()
+    menu = w.u.GetSystemMenu(hwnd, False)
+    if menu:
+        for i in range(max(0, w.u.GetMenuItemCount(menu))):
+            buf = w.ctypes.create_unicode_buffer(128)
+            w.u.GetMenuStringW(menu, i, buf, 128, 0x400)          # MF_BYPOSITION
+            if "copy all" in buf.value.replace("&", "").lower():
+                return w.u.GetMenuItemID(menu, i)
+    return IDM_COPYALL
+
+
+def copy_all(hwnd, wait=None):
+    """
+    PuTTY 의 화면(스크롤백 포함) 글자. (글자 또는 None, 알림)
+
+    PuTTY 가 클립보드에 쓰므로, 앞뒤로 사용자의 클립보드를 챙겨 되돌린다.
+    글자가 아닌 것(그림 등)이 있었으면 되돌리지 못한다 — 알림으로 알린다.
+    wait 는 PuTTY 가 다 쓸 때까지 화면을 살려 두는 함수다(tkinter update).
+    """
+    w = w32()
+    if w is None or not hwnd or not w.u.IsWindow(hwnd):
+        return None, ""
+    had_any = w.u.CountClipboardFormats() > 0
+    saved = clip_get()
+    seq = w.u.GetClipboardSequenceNumber()
+    res = w.ctypes.c_size_t()
+    # WM_SYSCOMMAND. SMTO_ABORTIFHUNG: PuTTY 가 멈춰 있으면 기다리지 않는다
+    w.u.SendMessageTimeoutW(hwnd, 0x0112, copy_all_id(hwnd), 0, 0x0002, 3000,
+                            w.ctypes.byref(res))
+    for _ in range(40):
+        if w.u.GetClipboardSequenceNumber() != seq:
+            break
+        if wait:
+            wait()
+        time.sleep(0.05)
+    if w.u.GetClipboardSequenceNumber() == seq:
+        return None, ""
+    text = clip_get()
+    clip_set(saved)
+    note = ""
+    if had_any and saved is None:
+        note = "클립보드에 있던 글자가 아닌 것(그림 등)은 되돌리지 못했습니다."
+    return text, note
+
+
+class FocusBridge(object):
+    """
+    탭 안의 PuTTY 와 이 창 사이에서 키보드 포커스를 넘긴다.
+
+    PuTTY 를 누르면 → PuTTY 가 마우스를 잡는 순간 PuTTY 에 포커스.
+    이 창의 입력칸을 누르면 → 창으로 포커스를 되돌린 뒤 tkinter 가 나눠 준다.
+    """
+
+    def __init__(self, root):
+        self.root = root
+        self.hosts = {}                   # PuTTY hwnd -> 탭 칸(tk Frame)
+        self.hook = None
+        self._cb = None
+        w = w32()
+        if w is None:
+            return
+        self._cb = w.WinEventProc(self._on_capture)
+        # EVENT_SYSTEM_CAPTURESTART, WINEVENT_OUTOFCONTEXT. 이 스레드의 메시지
+        # 루프(tkinter mainloop)에서 불린다.
+        self.hook = w.u.SetWinEventHook(0x0008, 0x0008, None, self._cb, 0, 0, 0)
+        root.bind_all("<Button-1>", self._take_back, add="+")
+
+    def add(self, hwnd, host):
+        self.hosts[hwnd] = host
+
+    def remove(self, hwnd):
+        self.hosts.pop(hwnd, None)
+
+    def give(self, hwnd):
+        host = self.hosts.get(hwnd)
+        if host is None:
+            return
+        try:
+            # tkinter 가 "포커스가 나갔다" 를 알아야 나중에 입력칸을 누를 때
+            # 포커스를 다시 가져간다
+            host.focus_set()
+            self.root.update_idletasks()
+        except Exception:                  # noqa: BLE001 - 닫히는 중인 탭
+            return
+        set_focus(hwnd)
+
+    def _on_capture(self, _hook, _ev, hwnd, _obj, _child, _tid, _t):
+        if hwnd in self.hosts:
+            self.give(hwnd)
+
+    def _take_back(self, _e):
+        if focused_window() in self.hosts:
+            set_focus(toplevel_of(self.root.winfo_id()))
+
+    def close(self):
+        w = w32()
+        if w is not None and self.hook:
+            w.u.UnhookWinEvent(self.hook)
+            self.hook = None
+
+
 # ---------------------------------------------------------------------------
 # 터널 하나
 # ---------------------------------------------------------------------------
 class TunnelSession(object):
     """
-    터널 하나와 그 위의 PuTTY 하나.
+    터널 하나와 그 위의 PuTTY 하나. 탭 하나가 이것을 하나 쥔다.
 
     events 큐로 화면에 소식을 보낸다. 화면(tkinter)은 자기 스레드에서만
-    만질 수 있으므로 여기서 직접 그리지 않는다.
+    만질 수 있으므로 여기서 직접 그리지 않는다. PuTTY 를 탭에 넣는 것도
+    화면 스레드가 한다("launched" 를 받고).
     """
 
     def __init__(self, app, server, info):
@@ -362,6 +773,7 @@ class TunnelSession(object):
         self.opened = threading.Event()
         self.state = "여는 중"
         self.reason = ""
+        self.opened_at = None              # PuTTY 가 붙은 때 (time.time)
         self.listener = None
         self.conn = None
         self.proc = None
@@ -400,6 +812,8 @@ class TunnelSession(object):
                 if kind == "O":
                     self.opened.set()
                     self.state = "PuTTY 를 기다리는 중"
+                    self.emit("%s · VDI 중계가 붙었습니다. PuTTY 를 띄웁니다"
+                              % self.server["name"])
                     threading.Thread(target=self._launch, daemon=True).start()
                 elif kind == "D":
                     self._to_putty(value)
@@ -435,6 +849,14 @@ class TunnelSession(object):
                 s.close()
         raise OSError("로컬 포트를 열지 못했습니다")
 
+    def putty_argv(self, exe, port):
+        argv = [exe, "-ssh", "-P", str(port), "-l", self.server["username"]]
+        if self.app.cfg.get("use_loghost", True):
+            # 제목과 호스트 키를 127.0.0.1 이 아니라 서버 이름으로 기억하게 한다.
+            argv += ["-loghost", self.server["name"]]
+        argv.append("127.0.0.1")
+        return argv
+
     def _launch(self):
         exe = putty_path(self.app.cfg)
         if not exe:
@@ -447,17 +869,19 @@ class TunnelSession(object):
             self.finish(str(exc), close_remote=True)
             return
         self.port = self.listener.getsockname()[1]
-        argv = [exe, "-ssh", "-P", str(self.port), "-l", self.server["username"]]
-        if self.app.cfg.get("use_loghost", True):
-            # 제목과 호스트 키를 127.0.0.1 이 아니라 서버 이름으로 기억하게 한다.
-            argv += ["-loghost", self.server["name"]]
-        argv.append("127.0.0.1")
+        kw = {"close_fds": True}
+        if os.name == "nt" and getattr(self.app, "embed", False):
+            # 숨긴 채로 띄운다. 화면 스레드가 탭에 넣은 뒤에 보인다(깜박임 없음).
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0                                    # SW_HIDE
+            kw["startupinfo"] = si
         try:
-            self.proc = subprocess.Popen(argv, close_fds=True)
+            self.proc = subprocess.Popen(self.putty_argv(exe, self.port), **kw)
         except OSError as exc:
             self.finish("PuTTY 를 띄우지 못했습니다 (%s)" % exc, close_remote=True)
             return
-        self.emit("%s · PuTTY 를 띄웠습니다 (127.0.0.1:%d)" % (self.server["name"], self.port))
+        self.app.events.put(("launched", self, None, None))
         try:
             conn, peer = self.listener.accept()
         except OSError:
@@ -491,7 +915,8 @@ class TunnelSession(object):
             self.finish("PuTTY 와의 연결이 끊어졌습니다", close_remote=True)
             return
         self.state = "열림"
-        self.emit("%s · 터널 열림. PuTTY 창에서 비밀번호를 치세요" % self.server["name"])
+        self.opened_at = time.time()
+        self.emit("%s · 열렸습니다. 탭 안의 PuTTY 에서 비밀번호를 치세요" % self.server["name"])
         self._up(conn)
 
     # --- PuTTY → 챗봇 서버 -----------------------------------------------
@@ -503,7 +928,8 @@ class TunnelSession(object):
             except OSError:
                 data = b""
             if not data:
-                self.finish("PuTTY 창을 닫았습니다", close_remote=True)
+                self.finish("PuTTY 세션이 끝났습니다 (exit 또는 PuTTY 를 닫음)",
+                            close_remote=True)
                 return
             if not send_chunks(self.link, self._path("up"), seq, data, self.stop):
                 if not self.stop.is_set():
@@ -516,12 +942,24 @@ class TunnelSession(object):
     def close(self, why="사용자가 닫았습니다"):
         self.finish(why, close_remote=True)
 
+    def kill_putty(self):
+        """PuTTY 를 먼저 끈다. 소켓을 먼저 닫으면 PuTTY 가 「Network error」 창을 띄운다."""
+        proc = self.proc
+        if proc is None or not hasattr(proc, "terminate"):
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+        except OSError:
+            pass
+
     def finish(self, reason, close_remote=False):
         if self.stop.is_set():
             return
         self.stop.set()
         self.state = "닫힘"
         self.reason = reason
+        self.kill_putty()
         if close_remote:
             try:
                 self.link.post(self._path("close"), {"reason": reason})
@@ -542,102 +980,150 @@ class TunnelSession(object):
 # ---------------------------------------------------------------------------
 # 화면
 # ---------------------------------------------------------------------------
+INK = "#16231F"
+MUTED = "#5A6B65"
+FAINT = "#9FADA8"
+LINE = "#CBD4D0"
+ACCENT = "#1C6A58"
+ACCENT_DARK = "#124437"
+ACCENT_SOFT = "#E3EFEB"
+ACCENT_LINE = "#BFDCD3"
+WARN = "#A8491A"
+WARN_SOFT = "#F8EBE2"
+WARN_LINE = "#E0C3AE"
+AMBER = "#E0B44A"
+GROUND = "#FFFFFF"
+PAPER = "#FDFEFD"
+PANEL = "#F4F6F5"
+SIDE = "#FBFCFB"
+TAB_OFF = "#E6EBE9"
+TERM = "#0E1C18"
+TERM_BAR = "#13261F"
+TERM_LINE = "#23392F"
+TERM_TEXT = "#9FC7B8"
+TERM_SOFT = "#6F9E8C"
+TERM_INK = "#E8F2EE"
+MINT = "#86DCB8"
+
+F = ("Malgun Gothic", 10)
+F_B = ("Malgun Gothic", 10, "bold")
+F_S = ("Malgun Gothic", 9)
+F_S_B = ("Malgun Gothic", 9, "bold")
+F_T = ("Malgun Gothic", 11, "bold")
+F_H = ("Malgun Gothic", 15, "bold")
+MONO = ("Consolas", 10)
+MONO_S = ("Consolas", 9)
+
+CMD_STATE = {"pending": "승인 대기", "running": "실행 중", "done": "실행됨",
+             "failed": "실패", "rejected": "거절됨", "expired": "시간이 지나 취소",
+             "blocked": "막힘", "denied": "거부됨"}
+
+
 def run_gui():
     import tkinter as tk
     from tkinter import filedialog, ttk
 
-    INK = "#16231F"
-    MUTED = "#5A6B65"
-    LINE = "#CBD4D0"
-    ACCENT = "#1C6A58"
-    WARN = "#A8491A"
-    GROUND = "#FFFFFF"
-    PANEL = "#F4F6F5"
-
+    dpi_aware()
     root = tk.Tk()
     root.title("%s %s" % (APP_NAME, VERSION))
-    root.geometry("1180x720")
-    root.minsize(900, 560)
+    scale = max(1.0, root.winfo_fpixels("1i") / 96.0)
+    # 화면보다 크게 열면 아래 입력칸이 작업 표시줄에 가린다
+    width = min(int(1320 * scale), root.winfo_screenwidth() - 40)
+    height = min(int(860 * scale), root.winfo_screenheight() - 90)
+    root.geometry("%dx%d+%d+%d" % (width, height, 20, 10))
+    root.minsize(min(int(1000 * scale), width), min(int(600 * scale), height))
     root.configure(bg=GROUND)
-    font = ("Malgun Gothic", 10)
-    mono = ("Consolas", 10)
-    root.option_add("*Font", font)
+    root.option_add("*Font", F)
 
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
     except tk.TclError:
         pass
-    style.configure("TFrame", background=GROUND)
-    style.configure("Panel.TFrame", background=PANEL)
-    style.configure("TLabel", background=GROUND, foreground=INK)
-    style.configure("Muted.TLabel", background=GROUND, foreground=MUTED)
-    style.configure("Panel.TLabel", background=PANEL, foreground=INK)
-    style.configure("Warn.TLabel", background=GROUND, foreground=WARN)
-    style.configure("Title.TLabel", background=GROUND, foreground=INK,
-                    font=("Malgun Gothic", 15, "bold"))
-    style.configure("Accent.TButton", foreground="#FFFFFF", background=ACCENT)
-    style.map("Accent.TButton", background=[("active", "#124437"), ("disabled", LINE)])
-    style.configure("Treeview", rowheight=26)
+    style.configure("TCombobox", padding=4)
 
-    state = {"cfg": load_config(), "api": None, "frame": None}
+    BUTTONS = {
+        "accent": (ACCENT, "#FFFFFF", ACCENT_DARK, ACCENT),
+        "plain": (GROUND, INK, PANEL, LINE),
+        "soft": (PANEL, INK, TAB_OFF, LINE),
+        "warn": (WARN, "#FFFFFF", "#8A3B14", WARN),
+        "mint": (MINT, TERM, "#A6E8CB", MINT),
+        "ghost": (TERM_BAR, "#CFE3DB", "#1B3329", "#3B5A4E"),
+    }
 
-    class App(object):
-        pass
+    def button(parent, text, cmd, kind="plain", font=F, **kw):
+        bg, fg, active, edge = BUTTONS[kind]
+        return tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg, font=font,
+                         activebackground=active, activeforeground=fg, relief="flat",
+                         bd=0, padx=kw.pop("padx", 12), pady=kw.pop("pady", 4),
+                         cursor="hand2", highlightthickness=1, highlightbackground=edge,
+                         highlightcolor=edge, disabledforeground=FAINT, **kw)
 
-    app = App()
-    app.events = queue.Queue()
-    app.tunnels = {}                       # tunnel_id -> TunnelSession
-    app.servers = []
-    app.me = None
-    app.session = None                     # 지금 Claude 패널의 대화
-    app.session_server = None
+    def dot(parent, color, bg, size=8):
+        c = tk.Canvas(parent, width=size, height=size, bg=bg, highlightthickness=0, bd=0)
+        c.create_oval(0, 0, size - 1, size - 1, fill=color, outline=color)
+        return c
+
+    def bind_tree(widget, seq, fn):
+        widget.bind(seq, fn)
+        for child in widget.winfo_children():
+            bind_tree(child, seq, fn)
+
+    state = {"cfg": load_config(), "frame": None}
+    app = types.SimpleNamespace(events=queue.Queue(), generation=0, cfg=None, api=None,
+                                embed=w32() is not None)
+    focus = FocusBridge(root)
 
     def clear_root():
         if state["frame"] is not None:
             state["frame"].destroy()
-
-    # 화면이 바뀌면 앞 화면의 새로 읽기/이벤트 펌프가 멈춰야 한다. 세대 번호로 가린다.
-    app.generation = 0
+            state["frame"] = None
 
     # --- C-1 등록 --------------------------------------------------------
     def show_register(message=""):
         app.generation += 1
         clear_root()
-        f = ttk.Frame(root, padding=36)
+        f = tk.Frame(root, bg=GROUND, padx=40, pady=36)
         f.pack(fill="both", expand=True)
         state["frame"] = f
-        ttk.Label(f, text="처음 한 번만 등록합니다", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(f, style="Muted.TLabel", wraplength=760, justify="left",
-                  text="웹의 서버 화면에서 「내 클라이언트」 코드를 받아 넣으면 이 PC 가 "
-                       "내 클라이언트가 됩니다. 남의 코드로는 등록되지 않습니다.").pack(
+        tk.Label(f, text="처음 한 번만 등록합니다", font=F_H, bg=GROUND, fg=INK).pack(
+            anchor="w")
+        tk.Label(f, bg=GROUND, fg=MUTED, wraplength=760, justify="left",
+                 text="웹의 서버 화면에서 「내 클라이언트」 코드를 받아 넣으면 이 PC 가 "
+                      "내 클라이언트가 됩니다. 남의 코드로는 등록되지 않습니다.").pack(
             anchor="w", pady=(4, 18))
 
-        row = ttk.Frame(f)
+        row = tk.Frame(f, bg=GROUND)
         row.pack(fill="x")
-        ttk.Label(row, text="챗봇 서버 주소").grid(row=0, column=0, sticky="w")
-        ttk.Label(row, text="등록 코드").grid(row=0, column=1, sticky="w", padx=(14, 0))
+        tk.Label(row, text="챗봇 서버 주소", bg=GROUND, fg=INK).grid(row=0, column=0,
+                                                                 sticky="w")
+        tk.Label(row, text="등록 코드", bg=GROUND, fg=INK).grid(row=0, column=1, sticky="w",
+                                                            padx=(14, 0))
         url = tk.StringVar(value=(state["cfg"] or {}).get("url", "https://"))
         code = tk.StringVar()
         insecure = tk.BooleanVar(value=bool((state["cfg"] or {}).get("insecure")))
-        e_url = ttk.Entry(row, textvariable=url, width=52, font=mono)
-        e_url.grid(row=1, column=0, sticky="we", pady=4)
-        e_code = ttk.Entry(row, textvariable=code, width=12, font=("Consolas", 13))
-        e_code.grid(row=1, column=1, sticky="w", padx=(14, 0), pady=4)
-        btn = ttk.Button(row, text="등록", style="Accent.TButton")
+        e_url = tk.Entry(row, textvariable=url, width=52, font=MONO, relief="flat",
+                         highlightthickness=1, highlightbackground=LINE,
+                         highlightcolor=ACCENT)
+        e_url.grid(row=1, column=0, sticky="we", pady=4, ipady=4)
+        e_code = tk.Entry(row, textvariable=code, width=12, font=("Consolas", 13),
+                          relief="flat", highlightthickness=1, highlightbackground=LINE,
+                          highlightcolor=ACCENT)
+        e_code.grid(row=1, column=1, sticky="w", padx=(14, 0), pady=4, ipady=2)
+        btn = button(row, "등록", None, "accent", font=F_B)
         btn.grid(row=1, column=2, padx=(14, 0))
-        ttk.Checkbutton(f, text="사내 사설 인증서 (인증서 검사를 하지 않음)",
-                        variable=insecure).pack(anchor="w", pady=(6, 0))
+        tk.Checkbutton(f, text="사내 사설 인증서 (인증서 검사를 하지 않음)",
+                       variable=insecure, bg=GROUND, fg=INK, activebackground=GROUND,
+                       selectcolor=GROUND).pack(anchor="w", pady=(6, 0))
 
-        msg = ttk.Label(f, text=message, style="Warn.TLabel", wraplength=760,
-                        justify="left")
+        msg = tk.Label(f, text=message, bg=GROUND, fg=WARN, wraplength=760, justify="left")
         msg.pack(anchor="w", pady=(14, 0))
 
         notes = ("1   코드는 10분 뒤에 만료됩니다. 새로 받으면 전에 받은 코드만 죽습니다.\n"
                  "2   등록하면 키가 %s 에 저장됩니다. 대상 서버 비밀번호는 저장하지 않습니다.\n"
                  "3   putty.exe 는 이 프로그램과 같은 폴더에 있어야 합니다. 지금: %s"
                  % (CONFIG_PATH, putty_path(state["cfg"]) or "없음"))
-        ttk.Label(f, text=notes, style="Muted.TLabel", justify="left").pack(
+        tk.Label(f, text=notes, bg=GROUND, fg=MUTED, justify="left").pack(
             anchor="w", pady=(18, 0))
 
         def do_register():
@@ -645,7 +1131,7 @@ def run_gui():
             if not u.startswith(("http://", "https://")):
                 u = "https://" + u
             api = Api(u, insecure=insecure.get())
-            btn.state(["disabled"])
+            btn.configure(state="disabled")
             msg.configure(text="등록하는 중...")
 
             def work():
@@ -656,7 +1142,7 @@ def run_gui():
                         "version": VERSION, "os": "%s %s" % (os.name, sys.platform)})
                 except ApiError as exc:
                     text = exc.message      # exc 는 except 블록이 끝나면 사라진다
-                    root.after(0, lambda: (btn.state(["!disabled"]),
+                    root.after(0, lambda: (btn.configure(state="normal"),
                                            msg.configure(text=text)))
                     return
                 cfg = dict(state["cfg"] or {})
@@ -681,139 +1167,186 @@ def run_gui():
         cfg = state["cfg"]
         app.cfg = cfg
         app.api = Api(cfg["url"], cfg.get("client_key"), insecure=bool(cfg.get("insecure")))
+        app.me = None
+        app.servers = []
+        app.can_tunnel = False
+        app.has_chat = False
+        app.tab_max = 4
+        app.tabs = []
+        app.active = None
+        app.target = None                  # Claude 패널의 대상 서버 id
+        app.sessions = {}                  # 서버 id -> 대화
+        app.session_lock = threading.Lock()
+        app.messages = {}                  # 서버 id -> 마지막으로 받은 메시지
+        app.busy = set()                   # 답을 기다리는 서버 id
+        app.shot = None                    # 입력칸 위의 화면 칩
 
-        outer = ttk.Frame(root)
+        outer = tk.Frame(root, bg=GROUND)
         outer.pack(fill="both", expand=True)
         state["frame"] = outer
 
-        top = ttk.Frame(outer, padding=(16, 10))
-        top.pack(fill="x")
-        ttk.Label(top, text=APP_NAME, font=("Malgun Gothic", 11, "bold")).pack(side="left")
-        ttk.Label(top, text=VERSION, style="Muted.TLabel", font=mono).pack(side="left",
-                                                                         padx=8)
-        relay_lbl = ttk.Label(top, text="", style="Muted.TLabel")
-        relay_lbl.pack(side="left", padx=14)
-        shell_lbl = ttk.Label(top, text="", style="Muted.TLabel")
-        shell_lbl.pack(side="left", padx=6)
-        ttk.Button(top, text="설정", command=lambda: show_settings()).pack(side="right")
+        # ── 위: 제목과 상태 ──
+        top = tk.Frame(outer, bg=PANEL, height=46, highlightthickness=0)
+        top.pack(fill="x", side="top")
+        top.pack_propagate(False)
+        tk.Frame(outer, bg=LINE, height=1).pack(fill="x", side="top")
+        tk.Label(top, text=APP_NAME, font=F_B, bg=PANEL, fg=INK).pack(side="left",
+                                                                      padx=(16, 6))
+        tk.Label(top, text=VERSION, font=MONO_S, bg=PANEL, fg=MUTED).pack(side="left")
+        tk.Frame(top, bg=LINE, width=1, height=18).pack(side="left", padx=12)
+        relay_pill = tk.Label(top, text="중계 확인 중", font=F_S, bg=GROUND, fg=MUTED,
+                              padx=10, pady=3, highlightthickness=1,
+                              highlightbackground=LINE)
+        relay_pill.pack(side="left")
+        tab_pill = tk.Label(top, text="탭 0 / -", font=F_S, bg=GROUND, fg=MUTED, padx=10,
+                            pady=3, highlightthickness=1, highlightbackground=LINE)
+        tab_pill.pack(side="left", padx=8)
+        button(top, "설정", lambda: show_settings()).pack(side="right", padx=16)
 
-        body = ttk.Frame(outer)
+        # ── 아래: 상태줄 ──
+        foot = tk.Frame(outer, bg=PANEL, height=30)
+        foot.pack(fill="x", side="bottom")
+        foot.pack_propagate(False)
+        tk.Frame(outer, bg=LINE, height=1).pack(fill="x", side="bottom")
+        foot_tabs = tk.Label(foot, text="", font=MONO_S, bg=PANEL, fg=MUTED)
+        foot_tabs.pack(side="left", padx=(16, 18))
+        foot_tab = tk.Label(foot, text="", font=MONO_S, bg=PANEL, fg=MUTED)
+        foot_tab.pack(side="left", padx=(0, 18))
+        foot_msg = tk.Label(foot, text="", font=F_S, bg=PANEL, fg=MUTED, anchor="w")
+        foot_msg.pack(side="left", fill="x", expand=True)
+
+        body = tk.Frame(outer, bg=GROUND)
         body.pack(fill="both", expand=True)
 
-        # 왼쪽: 서버 목록
-        left = ttk.Frame(body, padding=(16, 4, 8, 8))
-        left.pack(side="left", fill="both", expand=True)
-        ttk.Label(left, text="내가 쓸 수 있는 서버", font=("Malgun Gothic", 11, "bold")).pack(
-            anchor="w")
-        ttk.Label(left, text="웹에서 관리자가 등록한 것. 여기서는 고르기만 합니다",
-                  style="Muted.TLabel").pack(anchor="w", pady=(0, 6))
-        tree = ttk.Treeview(left, columns=("addr", "auth", "state"), show="tree headings",
-                            selectmode="browse", height=12)
-        tree.heading("#0", text="서버")
-        tree.heading("addr", text="주소")
-        tree.heading("auth", text="인증")
-        tree.heading("state", text="상태")
-        tree.column("#0", width=150)
-        tree.column("addr", width=230)
-        tree.column("auth", width=70)
-        tree.column("state", width=170)
-        tree.pack(fill="both", expand=True)
+        # ── 왼쪽: 서버 ──
+        left = tk.Frame(body, bg=SIDE, width=int(210 * scale))
+        left.pack(side="left", fill="y")
+        left.pack_propagate(False)
+        tk.Frame(body, bg=LINE, width=1).pack(side="left", fill="y")
+        tk.Label(left, text="서버", font=F_S_B, bg=SIDE, fg=MUTED).pack(
+            anchor="w", padx=18, pady=(14, 6))
+        server_box = tk.Frame(left, bg=SIDE)
+        server_box.pack(fill="x", padx=12)
+        tk.Label(left, text="웹에서 관리자가 등록한 것만 보입니다. 누르면 그 서버의 탭이 "
+                            "열립니다.", font=F_S, bg=SIDE, fg=MUTED, justify="left",
+                 wraplength=int(180 * scale)).pack(side="bottom", anchor="w", padx=18,
+                                                    pady=14)
+        why_lbl = tk.Label(left, text="", font=F_S, bg=SIDE, fg=WARN, justify="left",
+                           wraplength=int(180 * scale))
+        why_lbl.pack(side="bottom", anchor="w", padx=18)
 
-        bar = ttk.Frame(left)
-        bar.pack(fill="x", pady=8)
-        b_open = ttk.Button(bar, text="PuTTY 열기", style="Accent.TButton")
-        b_open.pack(side="left")
-        b_close = ttk.Button(bar, text="터널 닫기")
-        b_close.pack(side="left", padx=6)
-        b_chat = ttk.Button(bar, text="이 서버로 Claude")
-        b_chat.pack(side="left")
-        why_lbl = ttk.Label(left, text="", style="Warn.TLabel", wraplength=560,
-                            justify="left")
-        why_lbl.pack(anchor="w")
-        ttk.Label(left, style="Muted.TLabel", wraplength=560, justify="left",
-                  text="PuTTY 는 별도 창으로 뜹니다. 이 프로그램 안에 터미널을 그리지 "
-                       "않습니다. 비밀번호는 PuTTY 창에서 직접 칩니다 — 이 프로그램도 "
-                       "챗봇 서버도 그 글자를 보지 못합니다.").pack(anchor="w", pady=(8, 0))
+        # ── 오른쪽: Claude (C-3) ──
+        right = tk.Frame(body, bg=PAPER, width=int(380 * scale))
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
+        tk.Frame(body, bg=LINE, width=1).pack(side="right", fill="y")
 
-        # 오른쪽: Claude 패널 (C-3)
-        right = ttk.Frame(body, style="Panel.TFrame", padding=12)
-        right.pack(side="right", fill="both", expand=True)
-        head = ttk.Frame(right, style="Panel.TFrame")
-        head.pack(fill="x")
-        ttk.Label(head, text="Claude", style="Panel.TLabel",
-                  font=("Malgun Gothic", 12, "bold")).pack(side="left")
-        chat_srv = ttk.Label(head, text="서버를 고르고 「이 서버로 Claude」", style="Panel.TLabel")
-        chat_srv.pack(side="left", padx=10)
+        head = tk.Frame(right, bg=PAPER)
+        head.pack(fill="x", side="top")
+        tk.Label(head, text="Claude", font=("Malgun Gothic", 12, "bold"), bg=PAPER,
+                 fg=INK).pack(side="left", padx=(16, 0), pady=10)
+        target_box = ttk.Combobox(head, state="readonly", width=20, font=F)
+        target_box.pack(side="right", padx=(6, 14))
+        tk.Label(head, text="대상", font=F_S, bg=PAPER, fg=MUTED).pack(side="right")
+        tk.Frame(right, bg=LINE, height=1).pack(fill="x", side="top")
 
-        log = tk.Text(right, wrap="word", height=10, bg=GROUND, fg=INK, relief="flat",
-                      font=font, padx=10, pady=8, state="disabled",
-                      highlightthickness=1, highlightbackground=LINE)
-        log.pack(fill="both", expand=True, pady=8)
-        log.tag_configure("me", foreground=ACCENT, font=("Malgun Gothic", 10, "bold"))
-        log.tag_configure("bot", foreground=INK)
-        log.tag_configure("cmd", foreground=MUTED, font=mono)
+        # 입력칸을 **먼저** 아래에 붙인다. 1.0.0 은 대화칸을 먼저 쌓아서, 창이 낮으면
+        # 입력칸이 밀려나 보이지 않거나 눌리지 않았다.
+        composer = tk.Frame(right, bg=PAPER)
+        composer.pack(fill="x", side="bottom")
+        tk.Frame(right, bg=LINE, height=1).pack(fill="x", side="bottom")
+        chip_row = tk.Frame(composer, bg=PAPER)
+        chip_lbl = tk.Label(chip_row, text="", font=F_S, bg=ACCENT_SOFT, fg=ACCENT, padx=8,
+                            pady=2, highlightthickness=1, highlightbackground=ACCENT_LINE)
+        chip_lbl.pack(side="left")
+        chip_x = tk.Label(chip_row, text=" × ", font=F_B, bg=ACCENT_SOFT, fg=ACCENT,
+                          cursor="hand2", highlightthickness=1,
+                          highlightbackground=ACCENT_LINE)
+        chip_x.pack(side="left")
+        tk.Label(chip_row, text="× 로 뺄 수 있음", font=F_S, bg=PAPER,
+                 fg=MUTED).pack(side="left", padx=8)
+        ask_wrap = tk.Frame(composer, bg=PAPER)
+        ask_wrap.pack(fill="x", padx=16, pady=(12, 8))
+        ask = tk.Text(ask_wrap, height=4, wrap="word", font=F, relief="flat", bg=GROUND,
+                      fg=INK, padx=9, pady=7, highlightthickness=1,
+                      highlightbackground=ACCENT, highlightcolor=ACCENT, undo=True)
+        ask.pack(fill="x")
+        hint = tk.Label(ask_wrap, text="", font=F, bg=GROUND, fg=FAINT, cursor="xterm")
+        btn_row = tk.Frame(composer, bg=PAPER)
+        btn_row.pack(fill="x", padx=16, pady=(0, 12))
+        b_send = button(btn_row, "보내기", None, "accent", font=F_B, padx=18, pady=6)
+        b_send.pack(side="right")
+        b_paste = button(btn_row, "PuTTY 에서 복사한 것 붙여넣기", None, "soft", pady=6)
+        b_paste.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        log_wrap = tk.Frame(right, bg=PAPER)
+        log_wrap.pack(fill="both", expand=True)
+        log_bar = tk.Scrollbar(log_wrap, orient="vertical")
+        log_bar.pack(side="right", fill="y")
+        log = tk.Text(log_wrap, wrap="word", bg=PAPER, fg=INK, relief="flat", font=F,
+                      padx=14, pady=10, state="disabled", highlightthickness=0,
+                      yscrollcommand=log_bar.set, cursor="arrow", spacing1=2, spacing3=2)
+        log.pack(side="left", fill="both", expand=True)
+        log_bar.configure(command=log.yview)
+        log.tag_configure("me_h", foreground=ACCENT, font=F_S_B, justify="right")
+        log.tag_configure("me", foreground=INK, justify="right", lmargin1=60, lmargin2=60)
+        log.tag_configure("bot_h", foreground=MUTED, font=F_S_B)
+        log.tag_configure("bot", foreground=INK, rmargin=20)
+        log.tag_configure("chip", foreground=ACCENT, background=ACCENT_SOFT, font=F_S,
+                          justify="right")
+        log.tag_configure("cmd", foreground=MUTED, font=MONO_S, lmargin1=8, lmargin2=8)
         log.tag_configure("warn", foreground=WARN)
-        log.tag_configure("muted", foreground=MUTED)
+        log.tag_configure("muted", foreground=MUTED, font=F_S)
 
-        cards = ttk.Frame(right, style="Panel.TFrame")
-        cards.pack(fill="x")
-
-        ttk.Button(right, text="PuTTY 에서 복사한 것을 붙여넣기  ·  Ctrl+Shift+V",
-                   command=lambda: paste_clip()).pack(fill="x", pady=(6, 4))
-        ask_row = ttk.Frame(right, style="Panel.TFrame")
-        ask_row.pack(fill="x")
-        ask = tk.Text(ask_row, height=3, wrap="word", font=font, relief="flat",
-                      highlightthickness=1, highlightbackground=LINE)
-        ask.pack(side="left", fill="x", expand=True)
-        b_send = ttk.Button(ask_row, text="보내기", style="Accent.TButton")
-        b_send.pack(side="left", padx=(8, 0), fill="y")
-
-        status = ttk.Label(outer, text="", style="Muted.TLabel", padding=(16, 6))
-        status.pack(fill="x", side="bottom")
+        # ── 가운데: 탭 + 탭 안의 PuTTY ──
+        center = tk.Frame(body, bg=TERM)
+        center.pack(side="left", fill="both", expand=True)
+        strip = tk.Frame(center, bg=PANEL, height=int(40 * scale))
+        strip.pack(fill="x", side="top")
+        strip.pack_propagate(False)
+        tk.Frame(center, bg=LINE, height=1).pack(fill="x", side="top")
+        pages = tk.Frame(center, bg=TERM)
+        pages.pack(fill="both", expand=True)
+        empty = tk.Frame(pages, bg=TERM)
+        empty_lbl = tk.Label(empty, text="", font=F, bg=TERM, fg=TERM_TEXT, justify="center",
+                             wraplength=int(520 * scale))
+        empty_lbl.place(relx=0.5, rely=0.45, anchor="center")
 
         # --- 도우미 -----------------------------------------------------
         def say(text, level="info"):
-            status.configure(text=text, style=("Warn.TLabel" if level == "warn"
-                                               else "Muted.TLabel"))
+            foot_msg.configure(text=text, fg=WARN if level == "warn" else MUTED)
 
-        def selected():
-            sel = tree.selection()
-            if not sel:
-                return None
+        def server_by_id(sid):
             for s in app.servers:
-                if str(s["id"]) == sel[0]:
+                if s["id"] == sid:
                     return s
             return None
 
-        def open_for(server):
-            for t in app.tunnels.values():
-                if t.server["id"] == server["id"] and not t.stop.is_set():
+        def tab_for_server(sid):
+            for t in app.tabs:
+                if t.server["id"] == sid:
                     return t
             return None
 
-        def render_servers():
-            keep = tree.selection()
-            tree.delete(*tree.get_children())
-            for s in app.servers:
-                t = open_for(s)
-                st = ("터널 " + t.state) if t else (
-                    "마지막 확인 실패" if s.get("last_check_ok") is False else "켜짐")
-                tree.insert("", "end", iid=str(s["id"]), text=s["name"],
-                            values=(s["address"], s["auth_label"], st))
-            if keep and tree.exists(keep[0]):
-                tree.selection_set(keep[0])
-            update_buttons()
+        def tab_for_session(sess):
+            for t in app.tabs:
+                if t.sess is sess:
+                    return t
+            return None
 
-        def block_reason(server):
-            """누를 수 없는 단추에는 이유를 붙인다. 막는 것은 서버다(눌러도 서버가 거절)."""
-            if server is None:
-                return "서버를 고르세요."
+        def live_tabs():
+            return [t for t in app.tabs if t.phase != "closed"]
+
+        def block_reason():
+            """누를 수 없으면 이유. 막는 것은 서버다(눌러도 서버가 거절)."""
             if app.me and not app.me.get("version_ok", True):
                 return ("이 클라이언트가 낡았습니다. 서버가 %s 이상을 요구합니다. 웹에서 "
                         "새로 받아 주세요." % app.me.get("min_version"))
+            if app.me is None:
+                return "챗봇 서버에 묻는 중입니다."
             if not app.can_tunnel:
-                return "PuTTY 터널을 열 허용이 없습니다. 관리자에게 요청하세요."
-            if app.me and not app.me["relay"]["connected"]:
+                return "PuTTY 탭을 열 허용이 없습니다. 관리자에게 요청하세요."
+            if not app.me["relay"]["connected"]:
                 return ("내 VDI 의 중계 프로그램이 붙어 있지 않습니다. 웹의 서버 화면 → "
                         "「내 중계」 에서 설치하고 등록 코드를 넣으세요.")
             if not putty_path(app.cfg):
@@ -821,21 +1354,343 @@ def run_gui():
                         "두세요." % here())
             return ""
 
-        def update_buttons():
-            s = selected()
-            t = open_for(s) if s else None
-            why = "" if t else block_reason(s)
-            b_open.state(["disabled"] if (why or t) else ["!disabled"])
-            b_close.state(["!disabled"] if t else ["disabled"])
-            b_chat.state(["!disabled"] if (s and app.has_chat) else ["disabled"])
-            why_lbl.configure(text=why if s else "")
+        def minutes(since):
+            if not since:
+                return ""
+            m = int((time.time() - since) // 60)
+            return "%d분" % m if m < 60 else "%d시간 %d분" % (m // 60, m % 60)
 
-        tree.bind("<<TreeviewSelect>>", lambda _e: update_buttons())
+        # --- 탭 하나 (C-2 가운데, C-8 상태) ---------------------------------
+        class Tab(object):
+            def __init__(self, server):
+                self.server = server
+                self.sess = None
+                self.hwnd = None
+                self.embedded = False
+                self.phase = "opening"         # opening | open | closed
+                self.reason = ""
+                self.launched = False
+
+                self.page = tk.Frame(pages, bg=TERM)
+                bar = tk.Frame(self.page, bg=TERM_BAR, height=int(38 * scale))
+                bar.pack(fill="x", side="top")
+                bar.pack_propagate(False)
+                tk.Frame(self.page, bg=TERM_LINE, height=1).pack(fill="x", side="top")
+                self.info = tk.Label(bar, text="", font=MONO_S, bg=TERM_BAR, fg=TERM_TEXT)
+                self.info.pack(side="left", padx=12)
+                self.b_close = button(bar, "탭 닫기", lambda: close_tab(self), "ghost",
+                                      font=F_S, padx=10, pady=2)
+                self.b_close.pack(side="right", padx=(6, 12))
+                self.b_shot = button(bar, "이 화면을 Claude 에게", lambda: send_screen(self),
+                                     "mint", font=F_S_B, padx=11, pady=2)
+                self.b_shot.pack(side="right")
+                self.b_front = button(bar, "앞으로 가져오기", lambda: bring_front(self.hwnd),
+                                      "ghost", font=F_S, padx=10, pady=2)
+
+                self.stage = tk.Frame(self.page, bg=TERM)
+                self.stage.pack(fill="both", expand=True)
+                # PuTTY 가 들어갈 칸. 탭을 바꾸면 이 칸이 숨고, 그 안의 PuTTY 도 숨는다.
+                self.host = tk.Frame(self.stage, bg=TERM, takefocus=0)
+                self.host.bind("<Configure>", lambda _e: self.fit())
+                self.note = tk.Frame(self.stage, bg=TERM)
+
+                self.item = tk.Frame(strip, bg=TAB_OFF, cursor="hand2", padx=12)
+                self.item_dot = tk.Canvas(self.item, width=8, height=8, highlightthickness=0,
+                                          bd=0, bg=TAB_OFF)
+                self.item_dot.pack(side="left")
+                self.item_name = tk.Label(self.item, text=server["name"], font=F, bg=TAB_OFF,
+                                          fg=INK)
+                self.item_name.pack(side="left", padx=(7, 6))
+                self.item_x = tk.Label(self.item, text="×", font=F, bg=TAB_OFF, fg=FAINT,
+                                       cursor="hand2")
+                self.item_x.pack(side="left")
+                self.item.pack(side="left", padx=(0, 2), pady=(6, 0), fill="y")
+                bind_tree(self.item, "<Button-1>", lambda _e: activate(self))
+                self.item_x.bind("<Button-1>", lambda _e: (close_tab(self), "break")[1])
+
+            # 그리기
+            def paint(self):
+                on = app.active is self
+                bg = TERM if on else TAB_OFF
+                color = {"opening": AMBER, "closed": WARN}.get(
+                    self.phase, MINT if on else ACCENT)
+                self.item.configure(bg=bg)
+                self.item_dot.configure(bg=bg)
+                self.item_dot.delete("all")
+                self.item_dot.create_oval(0, 0, 7, 7, fill=color, outline=color)
+                self.item_name.configure(bg=bg, fg=TERM_INK if on else INK,
+                                         font=F_B if on else F)
+                self.item_x.configure(bg=bg, fg=TERM_SOFT if on else FAINT)
+                who = "%s@%s" % (self.server.get("username") or "?", self.server["name"])
+                if self.phase == "open":
+                    st = "열림 %s" % minutes(self.sess.opened_at if self.sess else None)
+                    if not self.embedded:
+                        st += " · 별도 창"
+                elif self.phase == "opening":
+                    st = "여는 중"
+                else:
+                    st = "끊김"
+                self.info.configure(text="%s · %s" % (who, st))
+                ready = self.phase == "open" and bool(self.hwnd)
+                self.b_shot.configure(state="normal" if ready else "disabled",
+                                      bg=MINT if ready else TERM_LINE,
+                                      highlightbackground=MINT if ready else TERM_LINE)
+                if self.phase == "open" and self.hwnd and not self.embedded:
+                    if not self.b_front.winfo_ismapped():
+                        self.b_front.pack(side="right", padx=6)
+                else:
+                    self.b_front.pack_forget()
+
+            def show_body(self):
+                for w in self.note.winfo_children():
+                    w.destroy()
+                if self.embedded and self.phase != "closed":
+                    self.note.pack_forget()
+                    self.host.pack(fill="both", expand=True)
+                    return
+                self.host.pack_forget()
+                self.note.pack(fill="both", expand=True)
+                if self.phase == "closed":
+                    self.note.configure(bg=PAPER)
+                    box = tk.Frame(self.note, bg=PAPER)
+                    box.place(relx=0.5, rely=0.42, anchor="center")
+                    tk.Label(box, text=self.reason or "닫혔습니다", font=F_T, bg=PAPER,
+                             fg=WARN, wraplength=int(520 * scale), justify="left").pack(
+                        anchor="w")
+                    tk.Label(box, text="PuTTY 는 끊긴 이유를 「Network error」 로만 압니다. "
+                                       "이유는 여기 적습니다. 다시 열면 비밀번호를 다시 "
+                                       "칩니다.", font=F_S, bg=PAPER, fg=MUTED,
+                             wraplength=int(520 * scale), justify="left").pack(
+                        anchor="w", pady=(6, 12))
+                    row = tk.Frame(box, bg=PAPER)
+                    row.pack(anchor="w")
+                    button(row, "다시 열기", lambda: reopen(self), "accent", font=F_B).pack(
+                        side="left")
+                    button(row, "탭 닫기", lambda: close_tab(self)).pack(side="left", padx=8)
+                    return
+                self.note.configure(bg=TERM)
+                box = tk.Frame(self.note, bg=TERM)
+                box.place(relx=0.5, rely=0.45, anchor="center")
+                if self.phase == "open" and not self.embedded:
+                    big = "PuTTY 를 탭 안에 넣지 못해 별도 창으로 열었습니다."
+                    small = ("터널은 같은 것이라 접속에는 영향이 없습니다. 위의 「앞으로 "
+                             "가져오기」 로 그 창을 앞으로 부릅니다.")
+                elif self.launched:
+                    big = "PuTTY 를 탭에 넣는 중…"
+                    small = "호스트 키를 묻는 창이 뜨면 서버 지문을 확인하고 누르세요."
+                else:
+                    big = "VDI 중계가 %s 에 붙는 중…" % (self.server.get("address")
+                                                    or self.server["name"])
+                    small = "30초 안에 붙지 않으면 이유를 적고 멈춥니다."
+                tk.Label(box, text=big, font=F, bg=TERM, fg=TERM_TEXT).pack()
+                tk.Label(box, text=small, font=F_S, bg=TERM, fg=TERM_SOFT,
+                         wraplength=int(520 * scale)).pack(pady=(6, 0))
+
+            def fit(self):
+                if self.embedded and self.hwnd:
+                    fit_window(self.hwnd, self.host.winfo_width(), self.host.winfo_height())
+
+            def forget_window(self):
+                if self.hwnd:
+                    focus.remove(self.hwnd)
+                    release_window(self.hwnd)
+                self.hwnd = None
+                self.embedded = False
+
+        # --- 탭 다루기 ---------------------------------------------------
+        def render_center():
+            if app.active is None:
+                for t in app.tabs:
+                    t.page.pack_forget()
+                why = block_reason()
+                empty_lbl.configure(
+                    text="왼쪽에서 서버를 누르면 여기에 그 서버의 PuTTY 가 탭으로 열립니다."
+                         + ("\n\n" + why if why else ""))
+                empty.pack(fill="both", expand=True)
+            else:
+                empty.pack_forget()
+            for t in app.tabs:
+                t.paint()
+            render_counts()
+
+        def activate(tab):
+            if app.active is not None and app.active is not tab:
+                app.active.page.pack_forget()
+            app.active = tab
+            empty.pack_forget()
+            tab.page.pack(fill="both", expand=True)
+            tab.show_body()
+            render_center()
+            render_servers()
+            set_target(tab.server["id"])
+            if tab.embedded and tab.hwnd:
+                root.update_idletasks()
+                tab.fit()
+                focus.give(tab.hwnd)
+
+        def open_tab(server):
+            existing = tab_for_server(server["id"])
+            if existing is not None:
+                activate(existing)
+                return
+            why = block_reason()
+            if why:
+                say(why, "warn")
+                return
+            if len(live_tabs()) >= app.tab_max:
+                say("PuTTY 탭은 한 사람에 %d개까지입니다. 쓰지 않는 탭을 먼저 닫아 "
+                    "주세요. (관리자가 웹의 중계 설정에서 바꿀 수 있습니다)" % app.tab_max,
+                    "warn")
+                return
+            tab = Tab(dict(server))
+            app.tabs.append(tab)
+            activate(tab)
+            start_tunnel(tab)
+
+        def start_tunnel(tab):
+            tab.phase = "opening"
+            tab.reason = ""
+            tab.launched = False
+            tab.forget_window()
+            tab.show_body()
+            render_center()
+            render_servers()
+            say("%s · 터널을 여는 중..." % tab.server["name"])
+            server = tab.server
+
+            def work():
+                try:
+                    info = app.api.call("POST", "/api/client/tunnel",
+                                        {"server_id": server["id"]})
+                except ApiError as exc:
+                    app.events.put(("open_failed", tab, exc.message, None))
+                    return
+                srv = dict(server)
+                srv.update(info.get("server") or {})
+                sess = TunnelSession(app, srv, info)
+                app.events.put(("started", tab, sess, None))
+                sess.start()
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def reopen(tab):
+            if tab.phase != "closed":
+                return
+            why = block_reason()
+            if why:
+                say(why, "warn")
+                return
+            if len(live_tabs()) >= app.tab_max:
+                say("PuTTY 탭은 한 사람에 %d개까지입니다. 다른 탭을 먼저 닫아 주세요."
+                    % app.tab_max, "warn")
+                return
+            start_tunnel(tab)
+
+        def close_tab(tab):
+            sess = tab.sess
+            if sess is not None:
+                # 칸을 지우기 전에 PuTTY 를 끈다. 칸이 먼저 사라지면 그 안의 PuTTY 가
+                # 주인 없는 창으로 남는다.
+                sess.kill_putty()
+                threading.Thread(target=sess.close, args=("탭을 닫았습니다",),
+                                 daemon=True).start()
+            tab.forget_window()
+            idx = app.tabs.index(tab)
+            app.tabs.remove(tab)
+            tab.item.destroy()
+            tab.page.destroy()
+            if app.active is tab:
+                app.active = None
+                if app.tabs:
+                    activate(app.tabs[min(idx, len(app.tabs) - 1)])
+                    return
+            render_center()
+            render_servers()
+            render_targets()
+
+        def on_found(sess, hwnd):
+            tab = tab_for_session(sess)
+            if tab is None or sess.stop.is_set():
+                return
+            tab.hwnd = hwnd
+            if hwnd and app.embed and embed_window(hwnd, tab.host.winfo_id()):
+                tab.embedded = True
+                focus.add(hwnd, tab.host)
+                tab.show_body()
+                show_window(hwnd, 5)                              # SW_SHOW
+                root.update_idletasks()
+                tab.fit()
+                if app.active is tab:
+                    focus.give(hwnd)
+            else:
+                # C-8 「탭이 안 될 때」: 별도 창으로 둔다. 터널은 같다.
+                tab.embedded = False
+                if hwnd:
+                    show_window(hwnd, 5)
+                tab.show_body()
+                say("%s · PuTTY 를 탭에 넣지 못해 별도 창으로 열었습니다"
+                    % tab.server["name"], "warn")
+            tab.paint()
+
+        def find_window(sess):
+            pid = getattr(sess.proc, "pid", None)
+            end = time.time() + EMBED_SECONDS
+            hwnd = None
+            while pid and time.time() < end and not sess.stop.is_set():
+                hwnd = find_putty_window(pid)
+                if hwnd:
+                    break
+                time.sleep(0.1)
+            app.events.put(("found", sess, hwnd, None))
+
+        # --- 왼쪽 서버 목록 ------------------------------------------------
+        def render_servers():
+            for w in server_box.winfo_children():
+                w.destroy()
+            if not app.servers:
+                tk.Label(server_box, text="쓸 수 있는 서버가 없습니다." if app.me else
+                         "불러오는 중…", font=F_S, bg=SIDE, fg=MUTED).pack(anchor="w",
+                                                                         padx=6)
+            for s in app.servers:
+                tab = tab_for_server(s["id"])
+                on = app.active is not None and app.active.server["id"] == s["id"]
+                if tab is not None and tab.phase == "closed":
+                    sub, sub_fg, color = "끊김 · 탭에 이유", WARN, WARN_LINE
+                elif tab is not None:
+                    sub, sub_fg, color = "탭 열림", ACCENT if on else MUTED, ACCENT
+                elif s.get("last_check_ok") is False:
+                    sub, sub_fg, color = "마지막 확인 실패", WARN, WARN_LINE
+                else:
+                    sub, sub_fg, color = "누르면 탭으로 열기", MUTED, LINE
+                bg = ACCENT_SOFT if on else GROUND
+                item = tk.Frame(server_box, bg=bg, cursor="hand2", highlightthickness=1,
+                                highlightbackground=ACCENT_LINE if on else LINE)
+                item.pack(fill="x", pady=3)
+                dot(item, color, bg).pack(side="left", padx=(10, 8))
+                words = tk.Frame(item, bg=bg)
+                words.pack(side="left", fill="x", expand=True, pady=6)
+                tk.Label(words, text=s["name"], font=F_B, bg=bg, fg=INK, anchor="w").pack(
+                    fill="x")
+                tk.Label(words, text=sub, font=F_S, bg=bg, fg=sub_fg, anchor="w").pack(
+                    fill="x")
+                bind_tree(item, "<Button-1>", lambda _e, srv=s: open_tab(srv))
+            why = block_reason()
+            why_lbl.configure(text=why if app.me else "")
+
+        def render_counts():
+            n = len(live_tabs())
+            tab_pill.configure(text="탭 %d / %d" % (n, app.tab_max),
+                               fg=WARN if n >= app.tab_max else MUTED)
+            foot_tabs.configure(text="탭 %d개" % n)
+            t = app.active
+            if t is not None:
+                foot_tab.configure(text="%s · %s" % (t.server["name"], {
+                    "opening": "여는 중", "closed": "끊김"}.get(
+                    t.phase, "열림 " + minutes(t.sess.opened_at if t.sess else None))))
+            else:
+                foot_tab.configure(text="")
 
         # --- 새로 읽기 -------------------------------------------------
-        app.can_tunnel = False
-        app.has_chat = False
-
         def refresh():
             if gen != app.generation:
                 return
@@ -855,75 +1710,145 @@ def run_gui():
             app.servers = srv["servers"]
             app.can_tunnel = bool(srv.get("can_tunnel"))
             app.has_chat = bool(srv.get("has_chat"))
+            app.tab_max = int(me.get("tab_max") or me.get("shell_max") or 4)
             r = me["relay"]
-            relay_lbl.configure(
-                text=("VDI 중계 붙어 있음 · %s" % r["name"]) if r["connected"]
-                else "VDI 중계가 붙어 있지 않음",
-                style="Muted.TLabel" if r["connected"] else "Warn.TLabel")
-            shell_lbl.configure(text="셸 %d / %d" % (me["shell_open"], me["shell_max"]))
+            if r["connected"]:
+                relay_pill.configure(text="VDI 중계 붙어 있음 · %s" % r["name"], fg=ACCENT,
+                                     bg=ACCENT_SOFT, highlightbackground=ACCENT_LINE)
+            else:
+                relay_pill.configure(text="VDI 중계가 붙어 있지 않음", fg=WARN, bg=WARN_SOFT,
+                                     highlightbackground=WARN_LINE)
+            # 탭이 들고 있는 서버 정보(주소 등)를 새로 맞춘다
+            for t in app.tabs:
+                s = server_by_id(t.server["id"])
+                if s is not None:
+                    t.server.update({k: v for k, v in s.items() if k != "username"
+                                     or not t.server.get("username")})
             render_servers()
+            render_center()
+            render_targets()
+            render_hint()
 
-        # --- 터널 -----------------------------------------------------
-        def open_tunnel():
-            s = selected()
-            if s is None or open_for(s):
+        # --- Claude 패널 -----------------------------------------------
+        target_ids = []
+
+        def render_targets():
+            labels = []
+            del target_ids[:]
+            for s in app.servers:
+                tab = tab_for_server(s["id"])
+                if app.active is not None and app.active.server["id"] == s["id"]:
+                    tail = " · 지금 탭"
+                elif tab is not None and tab.phase != "closed":
+                    tail = " · 탭"
+                else:
+                    tail = ""
+                labels.append(s["name"] + tail)
+                target_ids.append(s["id"])
+            target_box.configure(values=labels,
+                                 state="readonly" if app.has_chat else "disabled")
+            if app.target in target_ids:
+                target_box.current(target_ids.index(app.target))
+            else:
+                target_box.set("")
+
+        def render_hint():
+            if ask.get("1.0", "end").strip() or root.focus_get() is ask:
+                hint.place_forget()
                 return
-            why = block_reason(s)
-            if why:
-                say(why, "warn")
+            s = server_by_id(app.target) if app.target else None
+            if not app.has_chat and app.me is not None:
+                text = "채팅 메뉴를 쓸 허용이 없습니다"
+            elif s is None:
+                text = "먼저 위의 「대상」 에서 서버를 고르세요"
+            else:
+                text = "%s 에 대해 물어보기 · Ctrl+Enter 로 보내기" % s["name"]
+            hint.configure(text=text)
+            hint.place(x=11, y=8)
+
+        hint.bind("<Button-1>", lambda _e: ask.focus_set())
+        ask.bind("<FocusIn>", lambda _e: hint.place_forget())
+        ask.bind("<FocusOut>", lambda _e: render_hint())
+        ask.bind("<KeyRelease>", lambda _e: render_hint())
+
+        def render_chip():
+            shot = app.shot
+            if not shot:
+                chip_row.pack_forget()
                 return
-            b_open.state(["disabled"])
-            say("%s · 터널을 여는 중..." % s["name"])
+            chip_lbl.configure(text="%s · %d줄 붙임" % (shot["label"], shot["lines"]))
+            chip_row.pack(fill="x", padx=16, pady=(12, 0), before=ask_wrap)
 
-            def work():
-                try:
-                    info = app.api.call("POST", "/api/client/tunnel", {"server_id": s["id"]})
-                except ApiError as exc:
-                    app.events.put(("say", exc.message, "warn", None))
-                    app.events.put(("render", None, None, None))
-                    return
-                t = TunnelSession(app, s, info)
-                app.tunnels[t.id] = t
-                t.start()
-                app.events.put(("render", None, None, None))
-            threading.Thread(target=work, daemon=True).start()
+        def drop_chip(_e=None):
+            app.shot = None
+            render_chip()
 
-        def close_tunnel():
-            s = selected()
-            t = open_for(s) if s else None
-            if t:
-                threading.Thread(target=t.close, daemon=True).start()
+        chip_x.bind("<Button-1>", drop_chip)
 
-        b_open.configure(command=open_tunnel)
-        b_close.configure(command=close_tunnel)
-        tree.bind("<Double-1>", lambda _e: open_tunnel())
+        def set_target(sid, by_user=False):
+            if sid == app.target:
+                render_targets()
+                return
+            app.target = sid
+            if app.shot and app.shot["server_id"] != sid:
+                # 다른 서버의 화면을 이 서버 대화에 보내지 않는다
+                drop_chip()
+            render_targets()
+            render_hint()
+            b_send.configure(state="disabled" if sid in app.busy else "normal")
+            if sid is None:
+                return
+            if sid in app.messages:
+                render_messages(app.messages[sid])
+            else:
+                clear_log()
+                write("대화를 불러오는 중…\n", "muted")
+            load_chat(sid)
+            if by_user:
+                say("Claude 대상: %s" % (server_by_id(sid) or {}).get("name", ""))
 
-        # --- Claude 패널 ---------------------------------------------
+        def on_target(_e=None):
+            i = target_box.current()
+            if 0 <= i < len(target_ids):
+                set_target(target_ids[i], by_user=True)
+
+        target_box.bind("<<ComboboxSelected>>", on_target)
+
+        def clear_log():
+            for w in log.winfo_children():
+                w.destroy()
+            log.configure(state="normal")
+            log.delete("1.0", "end")
+            log.configure(state="disabled")
+
         def write(text, tag="bot"):
             log.configure(state="normal")
             log.insert("end", text, tag)
             log.configure(state="disabled")
             log.see("end")
 
-        def clear_cards():
-            for w in cards.winfo_children():
-                w.destroy()
-
         def copy(text):
             root.clipboard_clear()
             root.clipboard_append(text)
-            say("클립보드에 넣었습니다. PuTTY 창에서 Shift+Insert 로 붙이고 엔터는 직접 "
-                "치세요.")
+            say("클립보드에 넣었습니다. PuTTY 탭에서 Shift+Insert(또는 오른쪽 클릭)로 붙이고 "
+                "엔터는 직접 치세요.")
 
-        def card(c):
+        def card(c, sid):
             """승인 카드. 사람이 누르기 전에는 서버로 나가지 않는다."""
-            box = ttk.Frame(cards, style="Panel.TFrame", padding=(0, 4))
-            box.pack(fill="x")
-            ttk.Label(box, text="변경 · 승인을 기다립니다", style="Warn.TLabel").pack(anchor="w")
-            ttk.Label(box, text=c["command"], font=mono, style="Panel.TLabel",
-                      wraplength=480, justify="left").pack(anchor="w")
-            row = ttk.Frame(box, style="Panel.TFrame")
-            row.pack(anchor="w", pady=2)
+            box = tk.Frame(log, bg=WARN_SOFT, padx=10, pady=8, highlightthickness=1,
+                           highlightbackground=WARN_LINE)
+            top_row = tk.Frame(box, bg=WARN_SOFT)
+            top_row.pack(fill="x")
+            tk.Label(top_row, text=" 변경 · 승인을 기다립니다 ", font=F_S_B, bg=WARN,
+                     fg="#FFFFFF").pack(side="left")
+            if c.get("expires_in"):
+                tk.Label(top_row, text="%d초 안에" % c["expires_in"], font=F_S,
+                         bg=WARN_SOFT, fg=MUTED).pack(side="left", padx=8)
+            tk.Label(box, text=c["command"], font=MONO_S, bg=WARN_SOFT, fg=INK,
+                     wraplength=int(300 * scale), justify="left").pack(anchor="w",
+                                                                         pady=6)
+            row = tk.Frame(box, bg=WARN_SOFT)
+            row.pack(anchor="w")
 
             def decide(path):
                 def work():
@@ -932,93 +1857,115 @@ def run_gui():
                                      % (c["id"], path), {}, timeout=CHAT_TIMEOUT)
                     except ApiError as exc:
                         app.events.put(("say", exc.message, "warn", None))
-                    app.events.put(("reload_chat", None, None, None))
+                    app.events.put(("reload_chat", sid, None, None))
+                for b in row.winfo_children():
+                    b.configure(state="disabled")
                 threading.Thread(target=work, daemon=True).start()
 
-            ttk.Button(row, text="승인", style="Accent.TButton",
-                       command=lambda: decide("approve")).pack(side="left")
-            ttk.Button(row, text="거절", command=lambda: decide("reject")).pack(
-                side="left", padx=4)
-            ttk.Button(row, text="클립보드에 넣기",
-                       command=lambda: copy(c["command"])).pack(side="left")
+            button(row, "승인", lambda: decide("approve"), "warn", font=F_S_B).pack(
+                side="left")
+            button(row, "거절", lambda: decide("reject"), font=F_S).pack(side="left",
+                                                                        padx=6)
+            button(row, "클립보드에", lambda: copy(c["command"]), font=F_S).pack(
+                side="left")
+            log.configure(state="normal")
+            log.window_create("end", window=box, padx=2, pady=4)
+            log.insert("end", "\n")
+            log.configure(state="disabled")
 
         def render_messages(msgs):
-            log.configure(state="normal")
-            log.delete("1.0", "end")
-            log.configure(state="disabled")
-            clear_cards()
+            clear_log()
+            if not msgs:
+                write("아직 대화가 없습니다. 아래에 물어보세요.\n"
+                      "탭의 「이 화면을 Claude 에게」 를 누르면 그 화면이 질문에 붙습니다.\n",
+                      "muted")
             for m in msgs[-40:]:
                 if m["role"] == "user":
-                    write("\n나  ", "me")
-                    write(m["content"] + "\n", "bot")
+                    shot, rest = split_screen(m["content"])
+                    write("\n나\n", "me_h")
+                    if shot:
+                        write(" %s 화면 %d줄 붙음 · %s \n" % (shot["name"], shot["lines"],
+                                                          shot["at"]), "chip")
+                    write(rest.strip() + "\n", "me")
                     continue
                 if m["role"] == "error":
                     write("\n" + m["content"] + "\n", "warn")
                     continue
-                write("\nClaude  ", "me")
-                write(m["content"] + "\n", "bot")
+                write("\nClaude\n", "bot_h")
+                write(m["content"].strip() + "\n", "bot")
                 for c in m.get("commands") or []:
                     if c["state"] == "pending":
-                        card(c)
-                    else:
-                        write("  [%s · %s] %s\n" % (c.get("level_label", c["level"]),
-                                                   c["state"], c["command"]), "cmd")
+                        card(c, app.target)
+                        continue
+                    tail = ""
+                    if c.get("exit_code") is not None:
+                        tail = "  종료 %s" % c["exit_code"]
+                    write("[%s · %s] %s%s\n" % (c.get("level_label", c["level"]),
+                                                CMD_STATE.get(c["state"], c["state"]),
+                                                c["command"], tail), "cmd")
+            if app.target in app.busy:
+                write("\nClaude 가 서버를 보고 있습니다…\n", "muted")
 
-        def load_chat():
-            s = app.session
-            if not s:
+        def session_for(sid):
+            """그 서버의 대화. 없으면 만든다. (작업 스레드에서 부른다)"""
+            with app.session_lock:
+                if sid in app.sessions:
+                    return app.sessions[sid]
+            srv = server_by_id(sid) or {"name": str(sid)}
+            d = app.api.call("GET", "/api/client/servers/%d/sessions" % sid)
+            if d.get("same"):
+                sess = d["same"][0]
+            else:
+                sess = app.api.call("POST", "/api/client/sessions", {
+                    "name": "%s · 클라이언트" % srv["name"],
+                    "server_id": sid, "visibility": "private"})["session"]
+            with app.session_lock:
+                app.sessions[sid] = sess
+            return sess
+
+        def load_chat(sid):
+            if not app.has_chat or sid is None:
                 return
 
             def work():
                 try:
-                    d = app.api.call("GET", "/api/client/sessions/%d/messages" % s["id"])
-                    app.events.put(("messages", d["messages"], None, None))
-                except ApiError as exc:
-                    app.events.put(("say", exc.message, "warn", None))
-            threading.Thread(target=work, daemon=True).start()
-
-        def start_chat():
-            s = selected()
-            if s is None:
-                return
-            chat_srv.configure(text=s["name"])
-            say("%s · 대화를 찾는 중..." % s["name"])
-
-            def work():
-                try:
-                    d = app.api.call("GET", "/api/client/servers/%d/sessions" % s["id"])
-                    if d.get("same"):
-                        sess = d["same"][0]
-                    else:
-                        sess = app.api.call("POST", "/api/client/sessions", {
-                            "name": "%s · 클라이언트" % s["name"],
-                            "server_id": s["id"], "visibility": "private"})["session"]
-                    app.session = sess
-                    app.session_server = s
-                    app.events.put(("say", "%s · 대화 「%s」. 웹에서도 이어서 볼 수 있습니다"
-                                    % (s["name"], sess["name"]), "info", None))
-                    load_chat()
+                    sess = session_for(sid)
+                    d = app.api.call("GET", "/api/client/sessions/%d/messages" % sess["id"])
+                    app.events.put(("messages", sid, d["messages"], None))
                 except ApiError as exc:
                     app.events.put(("say", exc.message, "warn", None))
             threading.Thread(target=work, daemon=True).start()
 
         def send():
-            text = ask.get("1.0", "end").strip()
-            if not text:
+            sid = app.target
+            question = ask.get("1.0", "end").strip()
+            shot = app.shot if app.shot and app.shot["server_id"] == sid else None
+            if not question and shot:
+                question = "이 화면을 봐 줘."
+            if not question:
                 return
-            if not app.session:
-                say("먼저 서버를 고르고 「이 서버로 Claude」 를 누르세요.", "warn")
+            if sid is None:
+                say("먼저 Claude 패널 위의 「대상」 에서 서버를 고르세요.", "warn")
                 return
+            if sid in app.busy:
+                say("이 서버에 대한 앞 질문의 답을 기다리고 있습니다.", "warn")
+                return
+            text = compose_question(question, shot)
             ask.delete("1.0", "end")
-            write("\n나  ", "me")
-            write(text + "\n", "bot")
-            write("Claude 가 서버를 보고 있습니다...\n", "muted")
-            b_send.state(["disabled"])
-            sid = app.session["id"]
+            drop_chip()
+            render_hint()
+            write("\n나\n", "me_h")
+            if shot:
+                write(" %s 화면 %d줄 붙음 \n" % (shot["name"], shot["lines"]), "chip")
+            write(question + "\n", "me")
+            write("\nClaude 가 서버를 보고 있습니다…\n", "muted")
+            app.busy.add(sid)
+            b_send.configure(state="disabled")
 
             def work():
                 try:
-                    d = app.api.call("POST", "/api/client/sessions/%d/messages" % sid,
+                    sess = session_for(sid)
+                    d = app.api.call("POST", "/api/client/sessions/%d/messages" % sess["id"],
                                      {"message": text}, timeout=CHAT_TIMEOUT)
                     if (d.get("ssh") or {}).get("none"):
                         app.events.put(("say", "이 답에서는 서버에 명령을 보내지 않았습니다. "
@@ -1026,22 +1973,59 @@ def run_gui():
                                         "다시 물어 주세요.", "warn", None))
                 except ApiError as exc:
                     app.events.put(("say", exc.message, "warn", None))
-                app.events.put(("reload_chat", None, None, None))
-                app.events.put(("send_done", None, None, None))
+                app.events.put(("send_done", sid, None, None))
             threading.Thread(target=work, daemon=True).start()
 
+        def send_screen(tab):
+            """C-4 B: 누를 때만. PuTTY 의 Copy All → 마지막 60줄 → 칩."""
+            if tab.phase != "open" or not tab.hwnd:
+                say("열린 탭에서만 화면을 보낼 수 있습니다.", "warn")
+                return
+            text, note = copy_all(tab.hwnd)
+            if text is None:
+                say("PuTTY 화면을 읽지 못했습니다. PuTTY 에서 드래그해 복사한 뒤 "
+                    "「PuTTY 에서 복사한 것 붙여넣기」 를 쓰세요.", "warn")
+                return
+            body, n = screen_tail(text)
+            if not n:
+                say("화면이 비어 있습니다.", "warn")
+                return
+            set_target(tab.server["id"])
+            app.shot = {"server_id": tab.server["id"], "name": tab.server["name"],
+                        "label": "%s 화면" % tab.server["name"], "text": body, "lines": n,
+                        "at": time.strftime("%H:%M:%S")}
+            render_chip()
+            focus_ask()
+            say(note or "%s 화면 %d줄을 붙였습니다. 물어볼 것을 적고 보내세요. 보내기 전에 × 로 "
+                        "뺄 수 있습니다." % (tab.server["name"], n), "warn" if note else "info")
+
         def paste_clip():
+            sid = app.target
+            if sid is None:
+                say("먼저 「대상」 에서 서버를 고르세요.", "warn")
+                return
             try:
                 clip = root.clipboard_get()
             except tk.TclError:
+                clip = ""
+            body, n = screen_tail(clip)
+            if not n:
                 say("클립보드가 비어 있습니다. PuTTY 에서 드래그하면 바로 복사됩니다.", "warn")
                 return
-            # 언어 표시 없는 블록으로 감싼다. 챗봇은 이런 블록을 명령으로 실행하지 않는다.
-            ask.insert("end", "PuTTY 화면:\n```\n%s\n```\n" % clip.rstrip())
-            ask.focus_set()
+            name = (server_by_id(sid) or {}).get("name", "")
+            app.shot = {"server_id": sid, "name": name, "label": "복사한 것", "text": body,
+                        "lines": n, "at": time.strftime("%H:%M:%S")}
+            render_chip()
+            focus_ask()
 
-        b_chat.configure(command=start_chat)
+        def focus_ask():
+            if focused_window() in focus.hosts:
+                set_focus(toplevel_of(root.winfo_id()))
+            ask.focus_set()
+            hint.place_forget()
+
         b_send.configure(command=send)
+        b_paste.configure(command=paste_clip)
         ask.bind("<Control-Return>", lambda _e: (send(), "break")[1])
         root.bind("<Control-V>", lambda _e: paste_clip())   # Ctrl+Shift+V
 
@@ -1063,30 +2047,100 @@ def run_gui():
                         say(exc.message, "warn")
                     elif kind == "say":
                         say(ev[1], ev[2])
-                    elif kind == "render":
-                        render_servers()
+                    elif kind == "started":
+                        tab, sess = ev[1], ev[2]
+                        if tab in app.tabs:
+                            tab.sess = sess
+                        else:
+                            threading.Thread(target=sess.close, daemon=True).start()
+                    elif kind == "open_failed":
+                        tab = ev[1]
+                        if tab in app.tabs:
+                            tab.phase = "closed"
+                            tab.reason = ev[2]
+                            tab.show_body()
+                            render_center()
+                            render_servers()
+                            render_targets()
+                        say(ev[2], "warn")
+                    elif kind == "launched":
+                        tab = tab_for_session(ev[1])
+                        if tab is not None:
+                            tab.launched = True
+                            tab.show_body()
+                        threading.Thread(target=find_window, args=(ev[1],),
+                                         daemon=True).start()
+                    elif kind == "found":
+                        on_found(ev[1], ev[2])
                     elif kind == "tunnel":
+                        tab = tab_for_session(ev[1])
+                        if tab is not None and ev[1].state == "열림":
+                            tab.phase = "open"
+                            tab.show_body()
                         say(ev[2], ev[3])
+                        render_center()
                         render_servers()
+                        render_targets()
                     elif kind == "closed":
-                        t = ev[1]
-                        app.tunnels.pop(t.id, None)
-                        # PuTTY 는 「Network error」 밖에 모른다. 이유는 여기서 말한다.
-                        say("%s · %s" % (t.server["name"], ev[2]), "warn")
+                        sess = ev[1]
+                        tab = tab_for_session(sess)
+                        if tab is not None:
+                            # 끊긴 탭은 저절로 닫히지 않는다. 이유와 「다시 열기」 가 남는다.
+                            tab.phase = "closed"
+                            tab.reason = ev[2]
+                            tab.forget_window()
+                            tab.show_body()
+                            say("%s · %s" % (sess.server["name"], ev[2]), "warn")
+                        render_center()
                         render_servers()
+                        render_targets()
                     elif kind == "messages":
-                        render_messages(ev[1])
+                        app.messages[ev[1]] = ev[2]
+                        if ev[1] == app.target:
+                            render_messages(ev[2])
                     elif kind == "reload_chat":
-                        load_chat()
+                        load_chat(ev[1])
                     elif kind == "send_done":
-                        b_send.state(["!disabled"])
+                        app.busy.discard(ev[1])
+                        if ev[1] == app.target:
+                            b_send.configure(state="normal")
+                        load_chat(ev[1])
             except queue.Empty:
                 pass
-            root.after(120, pump)
+            root.after(100, pump)
 
+        def tick():
+            """시간 표시를 새로 하고, 붙기 전에 꺼진 PuTTY 를 알아챈다."""
+            if gen != app.generation:
+                return
+            for t in app.tabs:
+                s = t.sess
+                proc = getattr(s, "proc", None) if s else None
+                if (s is not None and not s.stop.is_set() and proc is not None
+                        and hasattr(proc, "poll") and proc.poll() is not None):
+                    threading.Thread(target=s.finish, args=("PuTTY 가 닫혔습니다",),
+                                     kwargs={"close_remote": True}, daemon=True).start()
+                t.paint()
+            render_counts()
+            root.after(5000, tick)
+
+        def close_everything():
+            for t in list(app.tabs):
+                if t.sess is not None:
+                    t.sess.kill_putty()
+                t.forget_window()
+            for t in list(app.tabs):
+                if t.sess is not None:
+                    t.sess.close("클라이언트를 닫았습니다")
+
+        app.close_all = close_everything
         say("putty.exe : %s" % (putty_path(cfg) or "없음 — 이 프로그램 옆에 두세요"))
+        render_servers()
+        render_center()
+        render_hint()
         pump()
         refresh()
+        tick()
 
     # --- C-7 설정 ---------------------------------------------------------
     def show_settings():
@@ -1094,27 +2148,31 @@ def run_gui():
         win = tk.Toplevel(root)
         win.title("설정")
         win.configure(bg=GROUND)
-        win.geometry("640x380")
-        f = ttk.Frame(win, padding=20)
+        win.geometry("%dx%d" % (680 * scale, 400 * scale))
+        f = tk.Frame(win, bg=GROUND, padx=20, pady=20)
         f.pack(fill="both", expand=True)
         rows = [("챗봇 서버", cfg.get("url", "")),
                 ("설정 파일", CONFIG_PATH),
                 ("이 프로그램", here()),
                 ("putty.exe", putty_path(cfg) or "없음"),
+                ("PuTTY 탭", "한 사람 %s개까지 (관리자가 웹의 중계 설정에서 바꿉니다)"
+                 % (getattr(app, "tab_max", None) or "-")),
+                ("탭 안에 넣기", "켜짐" if app.embed else "이 PC 에서는 별도 창으로"),
                 ("등록한 때", cfg.get("registered_at", ""))]
         for i, (k, v) in enumerate(rows):
-            ttk.Label(f, text=k, style="Muted.TLabel").grid(row=i, column=0, sticky="w",
-                                                           pady=3)
-            ttk.Label(f, text=v, font=mono).grid(row=i, column=1, sticky="w", padx=12)
+            tk.Label(f, text=k, bg=GROUND, fg=MUTED).grid(row=i, column=0, sticky="w", pady=3)
+            tk.Label(f, text=v, font=MONO, bg=GROUND, fg=INK).grid(row=i, column=1,
+                                                                   sticky="w", padx=12)
         loghost = tk.BooleanVar(value=cfg.get("use_loghost", True))
 
         def save_loghost():
             cfg["use_loghost"] = loghost.get()
             save_config(cfg)
 
-        ttk.Checkbutton(f, variable=loghost, command=save_loghost,
-                        text="PuTTY 제목과 호스트 키를 서버 이름으로 (-loghost). "
-                             "PuTTY 가 이 옵션을 모르면 끄세요").grid(
+        tk.Checkbutton(f, variable=loghost, command=save_loghost, bg=GROUND,
+                       activebackground=GROUND, selectcolor=GROUND,
+                       text="PuTTY 제목과 호스트 키를 서버 이름으로 (-loghost). "
+                            "PuTTY 가 이 옵션을 모르면 끄세요").grid(
             row=len(rows), column=0, columnspan=2, sticky="w", pady=(14, 4))
 
         def pick_putty():
@@ -1127,6 +2185,7 @@ def run_gui():
 
         def forget():
             # 이 PC 의 키만 지운다. 서버 쪽 등록은 웹의 「등록 해제」 가 끊는다.
+            close_all()
             try:
                 os.remove(CONFIG_PATH)
             except OSError:
@@ -1136,15 +2195,19 @@ def run_gui():
             show_register("이 PC 의 키를 지웠습니다. 웹에서도 「등록 해제」 를 눌러 "
                           "서버 쪽 등록을 끊으세요.")
 
-        btns = ttk.Frame(f)
+        btns = tk.Frame(f, bg=GROUND)
         btns.grid(row=len(rows) + 1, column=0, columnspan=2, sticky="w", pady=12)
-        ttk.Button(btns, text="putty.exe 직접 고르기", command=pick_putty).pack(side="left")
-        ttk.Button(btns, text="이 PC 의 등록 지우기", command=forget).pack(side="left",
-                                                                     padx=8)
+        button(btns, "putty.exe 직접 고르기", pick_putty).pack(side="left")
+        button(btns, "이 PC 의 등록 지우기", forget).pack(side="left", padx=8)
+
+    def close_all():
+        fn = getattr(app, "close_all", None)
+        if fn:
+            fn()
 
     def on_close():
-        for t in list(getattr(app, "tunnels", {}).values()):
-            t.close("클라이언트를 닫았습니다")
+        close_all()
+        focus.close()
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)

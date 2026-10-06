@@ -47,7 +47,8 @@ TAB_TITLES = {"connect": "중계 설정", "grants": "사용 허용", "log": "기
 SETTING_KEYS = ("relay_policy", "relay_poll_seconds", "relay_run_timeout",
                 "relay_approval_seconds", "relay_term_max_per_user",
                 "relay_term_idle_seconds", "relay_chat_max_commands",
-                "relay_queue_keep_days", "relay_tunnel_idle_seconds")
+                "relay_queue_keep_days", "relay_tunnel_idle_seconds",
+                "relay_tunnel_max_per_user")
 
 
 def _page(tab):

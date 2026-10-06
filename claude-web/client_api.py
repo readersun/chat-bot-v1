@@ -152,9 +152,11 @@ def me():
         relay={"connected": agent is not None,
                "name": agent["name"] if agent else "",
                "last_seen_at": agent["last_seen_at"] if agent else None},
-        shell_max=rstore.term_max_per_user(db),
-        shell_open=(rstore.open_term_count(db, user["id"])
-                    + tstore.open_tunnel_count(db, user["id"])))
+        # tab_* 은 1.1.0 부터 본다. shell_* 은 1.0.0 이 읽으므로 같은 값으로 남긴다.
+        tab_max=tstore.tunnel_max_per_user(db),
+        tab_open=tstore.open_tunnel_count(db, user["id"]),
+        shell_max=tstore.tunnel_max_per_user(db),
+        shell_open=tstore.open_tunnel_count(db, user["id"]))
 
 
 @client_api.get("/servers")
@@ -225,11 +227,10 @@ def open_tunnel():
     permissions.require_shell(db, user, permissions.SHELL_TUNNEL)
     relay_mod._require_my_relay(db, user)
 
-    limit = rstore.term_max_per_user(db)
-    used = rstore.open_term_count(db, user["id"]) + tstore.open_tunnel_count(db, user["id"])
-    if used >= limit:
-        abort(409, "한 사람이 동시에 열 수 있는 셸(웹 콘솔과 터널을 합쳐)은 %d개"
-                   "까지입니다. 쓰지 않는 것을 먼저 닫아 주세요." % limit)
+    limit = tstore.tunnel_max_per_user(db)
+    if tstore.open_tunnel_count(db, user["id"]) >= limit:
+        abort(409, "PuTTY 탭은 한 사람에 %d개까지입니다. 쓰지 않는 탭을 먼저 닫아 "
+                   "주세요. (관리자가 중계 설정에서 바꿀 수 있습니다)" % limit)
     if not tstore.capacity_left(db):
         abort(429, "지금 터널을 더 열 수 없습니다. 잠시 뒤에 다시 시도해 주세요.")
 

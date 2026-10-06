@@ -233,6 +233,7 @@ SETTINGS_BOOTSTRAP = {
     "relay_chat_max_commands": str(env_int("RELAY_CHAT_MAX_COMMANDS", 3)),
     "relay_queue_keep_days": str(env_int("RELAY_QUEUE_KEEP_DAYS", 90)),
     "relay_tunnel_idle_seconds": str(env_int("RELAY_TUNNEL_IDLE_SECONDS", 600)),
+    "relay_tunnel_max_per_user": str(env_int("RELAY_TUNNEL_MAX_PER_USER", 4)),
 }
 
 # ---------------------------------------------------------------------------

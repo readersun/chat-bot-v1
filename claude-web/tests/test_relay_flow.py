@@ -2184,15 +2184,31 @@ class TestTunnel(ClientBase):
         self.assertIn("127.0.0.1:1", t.closed)
         self.assertNotIn("O", t.frames)
 
-    def test_limit_counts_web_consoles_and_tunnels_together(self):
-        set_setting("relay_term_max_per_user", "2")
-        t = self.open()
-        code, data = self.j("POST", "/api/term", {"server_id": self.srv["id"]})
-        self.assertEqual(code, 201, data)
+    def test_tabs_and_web_consoles_are_counted_apart(self):
+        # 탭 상한은 웹 설정 하나로 바뀌고, 웹 콘솔 상한과 섞이지 않는다.
+        set_setting("relay_term_max_per_user", "1")
+        set_setting("relay_tunnel_max_per_user", "2")
+        a = self.open()
+        b = self.open()
+        code, data = self.cj(self.key, "GET", "/api/client/me")
+        self.assertEqual((data["tab_open"], data["tab_max"]), (2, 2), data)
         code, data = self.cj(self.key, "POST", "/api/client/tunnel",
                              {"server_id": self.srv["id"]})
         self.assertEqual(code, 409, data)
-        self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+        self.assertIn("탭은 한 사람에 2개", data["error"])
+        # 탭이 둘 열려 있어도 웹 콘솔 하나는 열린다
+        code, data = self.j("POST", "/api/term", {"server_id": self.srv["id"]})
+        self.assertEqual(code, 201, data)
+        # 관리자가 올리면 바로 하나 더 열린다
+        set_setting("relay_tunnel_max_per_user", "3")
+        c = self.open()
+        for t in (a, b, c):
+            self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+
+    def test_tab_limit_setting_is_clamped(self):
+        set_setting("relay_tunnel_max_per_user", "99")
+        code, data = self.cj(self.key, "GET", "/api/client/me")
+        self.assertEqual(data["tab_max"], 8)
 
     def test_no_relay_means_503(self):
         for r in self.relays:

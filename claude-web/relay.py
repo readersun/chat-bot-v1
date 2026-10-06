@@ -658,11 +658,11 @@ def open_term():
         abort(409, "꺼 둔 서버입니다. 관리자에게 문의하세요.")
     _require_my_relay(db, user)
 
+    # 웹 콘솔만 센다. 클라이언트의 PuTTY 탭은 relay_tunnel_max_per_user 가 따로 센다.
     limit = store.term_max_per_user(db)
-    used = store.open_term_count(db, user["id"]) + tstore.open_tunnel_count(db, user["id"])
-    if used >= limit:
-        abort(409, "한 사람이 동시에 열 수 있는 셸(웹 콘솔과 PuTTY 터널을 합쳐)은 "
-                   "%d개까지입니다. 쓰지 않는 것을 먼저 닫아 주세요." % limit)
+    if store.open_term_count(db, user["id"]) >= limit:
+        abort(409, "한 사람이 동시에 열 수 있는 웹 콘솔은 %d개까지입니다. 쓰지 않는 "
+                   "것을 먼저 닫아 주세요." % limit)
 
     cols = max(40, min(200, int(data.get("cols") or 120)))
     rows_n = max(10, min(60, int(data.get("rows") or 30)))

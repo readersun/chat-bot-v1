@@ -449,6 +449,11 @@ def close_tunnel(db, pipe, reason, failed=False):
     persist_closed(db, pipe)
 
 
+def tunnel_max_per_user(db):
+    """한 사람이 동시에 열 수 있는 PuTTY 탭(터널) 수. 웹 콘솔과 따로 센다."""
+    return max(1, min(8, settings_store.get_int(db, "relay_tunnel_max_per_user", 4)))
+
+
 def open_tunnel_count(db, user_id):
     return db.execute(
         "SELECT COUNT(*) AS c FROM tunnel_sessions"

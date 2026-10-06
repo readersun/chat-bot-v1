@@ -81,9 +81,14 @@ SETTING_DEFS = [
     {"key": "relay_approval_seconds", "label": "승인 대기 (초)", "type": "int",
      "min": 30, "max": 600, "restart": False, "group": "relay",
      "help": "이 시간 안에 승인하지 않으면 취소된다. 승인 카드에 남은 시간을 보여 준다"},
-    {"key": "relay_term_max_per_user", "label": "한 사람 동시 터미널", "type": "int",
+    {"key": "relay_term_max_per_user", "label": "한 사람 동시 웹 콘솔", "type": "int",
      "min": 1, "max": 4, "restart": False, "group": "relay",
-     "help": "워커 1개 / 스레드 8개로 도는 서버다. 이 값을 올리면 채팅이 느려진다"},
+     "help": "브라우저 안의 웹 콘솔만 센다. 클라이언트의 PuTTY 탭은 따로 센다. "
+             "이 값을 올리면 채팅이 느려진다"},
+    {"key": "relay_tunnel_max_per_user", "label": "한 사람 PuTTY 탭 수", "type": "int",
+     "min": 1, "max": 8, "restart": False, "group": "relay",
+     "help": "클라이언트에서 한 사람이 동시에 열 수 있는 PuTTY 탭(터널) 수. 탭 하나가 "
+             "서버 스레드 둘을 쥔다. 서버 전체가 모자라면 이 값과 상관없이 거절한다"},
     {"key": "relay_term_idle_seconds", "label": "터미널 자동 닫기 (초)", "type": "int",
      "min": 30, "max": 1800, "restart": False, "group": "relay",
      "help": "브라우저가 이만큼 조용하면 그 터미널을 닫는다. 끊긴 세션을 서버 "
