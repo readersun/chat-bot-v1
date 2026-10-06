@@ -54,6 +54,7 @@ import patch as patch_module
 import patch_scan
 import permissions
 import providers
+import client_api as client_api_module
 import relay as relay_module
 import relay_store
 import settings_store
@@ -109,6 +110,7 @@ app.register_blueprint(relay_module.api)
 app.register_blueprint(relay_module.relay_api)
 app.register_blueprint(admin_relay_module.bp)
 app.register_blueprint(admin_relay_module.api)
+app.register_blueprint(client_api_module.client_api)
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +440,12 @@ PUBLIC_PATHS = ("/login", "/setup", "/health", "/sw.js", "/manifest.webmanifest"
 
 @app.before_request
 def before():
+    # 클라이언트(claude-term)의 길에서는 쿠키를 **읽지 않는다.** 키로만 사람을
+    # 정한다. 쿠키로도 통하게 두면 CSRF 를 건너뛰는 이 길을 남의 사이트가
+    # 사용자 브라우저로 부를 수 있다.
+    if request.path.startswith(client_api_module.PREFIX):
+        client_api_module.load_client_user()
+        return None
     auth.load_current_user()
     if request.path.startswith("/static/") or request.path in ("/health",):
         return None
@@ -1108,6 +1116,31 @@ def post_message(sid):
     return jsonify(ok=ok, mode=mode, elapsed=elapsed,
                    messages=messages[-2:], error=None if ok else reply,
                    ssh=cmd_note)
+
+
+# ---------------------------------------------------------------------------
+# 클라이언트(claude-term)의 Claude 패널
+#
+# 웹과 **같은 뷰 함수**를 /api/client/ 아래에 한 번 더 건다. 길만 다르고 속은
+# 하나다. claude -p 를 서버에서 돌리는 것도, 조회·변경 판정과 승인 카드도,
+# 대화가 남는 DB 도 같다. 그래서 클라이언트에서 한 대화를 웹에서 이어서 본다.
+#
+# 이 길에서는 g.user 가 쿠키가 아니라 X-Client-Key 로 정해진다(before).
+# 뷰 함수의 권한 검사(login_required · menu_required · 대화 권한 · 서버 허용)는
+# 그대로 다시 돈다.
+# ---------------------------------------------------------------------------
+for _rule, _view, _methods in (
+        ("/api/client/sessions", create_session_anywhere, ["POST"]),
+        ("/api/client/sessions/<int:sid>/messages", list_messages, ["GET"]),
+        ("/api/client/sessions/<int:sid>/messages", post_message, ["POST"]),
+        ("/api/client/servers/<int:server_id>/sessions",
+         relay_module.server_sessions, ["GET"]),
+        ("/api/client/ssh/commands/<int:cmd_id>/approve",
+         relay_module.approve_command, ["POST"]),
+        ("/api/client/ssh/commands/<int:cmd_id>/reject",
+         relay_module.reject_command, ["POST"])):
+    app.add_url_rule(_rule, endpoint="client_%s_%s" % (_view.__name__, _methods[0].lower()),
+                     view_func=_view, methods=_methods)
 
 
 # ---------------------------------------------------------------------------

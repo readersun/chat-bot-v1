@@ -20,6 +20,8 @@ relay - 사내망 SSH 중계 (VDI 에서 돈다)
     - 챗봇 서버에서 할 일을 받아 ssh.exe / plink.exe 를 돌린다
     - 터미널 화면을 그대로 올려 보낸다
     - 받은 접속 정보는 메모리에만 두고 쓰고 버린다
+    - PuTTY 터널: 대상 서버의 22번에 **소켓만** 열고 바이트를 옮긴다.
+      SSH 는 사용자 PC 의 PuTTY 가 한다. 이 프로그램은 암호문만 본다.
 
 안 하는 일
 ----------
@@ -35,19 +37,23 @@ pip install 이 필요 없고, PyInstaller 로 한 파일로 묶을 수 있다.
     pyinstaller --onefile --name relay relay.py
 """
 
+import base64
+import http.client
 import json
 import os
 import re
 import queue
+import socket
 import ssl
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 APP_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "claude-relay")
@@ -136,6 +142,155 @@ class Server(object):
                 data = {}
             data["_status"] = exc.code
             return data
+
+
+# ---------------------------------------------------------------------------
+# 터널용 HTTP
+#
+# 클라이언트(claude-term)에도 같은 모양이 있다. 두 프로그램 모두 파일 하나로
+# 묶여 따로 나가므로 서로 import 하지 않는다. 규약을 바꾸면 둘 다 고친다.
+#
+#   위로  : POST {"seq": n, "data": base64}. 연결을 재사용한다. 키 하나마다
+#           TLS 를 새로 맺으면 그것만으로 수십 ms 가 붙는다.
+#   아래로 : 쥐고 있는 GET. 한 줄짜리 프레임 (O / D <b64> / H / C <json>)
+# ---------------------------------------------------------------------------
+class Link(object):
+    def __init__(self, base_url, headers, insecure=False):
+        u = urllib.parse.urlsplit(base_url.rstrip("/"))
+        self.https = u.scheme == "https"
+        self.host = u.hostname
+        self.port = u.port or (443 if self.https else 80)
+        self.base = u.path.rstrip("/")
+        self.headers = dict(headers)
+        self.ctx = None
+        if self.https:
+            self.ctx = ssl.create_default_context()
+            if insecure:
+                self.ctx.check_hostname = False
+                self.ctx.verify_mode = ssl.CERT_NONE
+        self._up = None
+        self._stream = None
+
+    def _new(self, timeout):
+        if self.https:
+            return http.client.HTTPSConnection(self.host, self.port, timeout=timeout,
+                                               context=self.ctx)
+        return http.client.HTTPConnection(self.host, self.port, timeout=timeout)
+
+    def post(self, path, payload, timeout=30):
+        """반환: (상태 코드, dict). 연결이 끊겼으면 한 번 새로 맺어 다시 보낸다."""
+        body = json.dumps(payload).encode("utf-8")
+        hdr = dict(self.headers)
+        hdr["Content-Type"] = "application/json"
+        for attempt in (1, 2):
+            if self._up is None:
+                self._up = self._new(timeout)
+            try:
+                self._up.request("POST", self.base + path, body=body, headers=hdr)
+                res = self._up.getresponse()
+                raw = res.read()
+                try:
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except ValueError:
+                    data = {}
+                return res.status, data
+            except (OSError, http.client.HTTPException):
+                try:
+                    self._up.close()
+                except OSError:
+                    pass
+                self._up = None
+                if attempt == 2:
+                    raise
+        return 0, {}
+
+    def stream(self, path, timeout=90):
+        """
+        아래 스트림. 반환: (상태 코드, 프레임 iterator 또는 오류 dict)
+
+        timeout 은 심박(서버 기본 15초)보다 넉넉해야 한다. 그보다 오래 아무
+        줄도 안 오면 연결이 죽은 것이다.
+        """
+        conn = self._new(timeout)
+        self._stream = conn
+        conn.request("GET", self.base + path, headers=self.headers)
+        res = conn.getresponse()
+        if res.status != 200:
+            raw = res.read()
+            conn.close()
+            try:
+                return res.status, json.loads(raw.decode("utf-8") or "{}")
+            except ValueError:
+                return res.status, {}
+
+        def frames():
+            try:
+                while True:
+                    line = res.readline()
+                    if not line:
+                        return
+                    line = line.rstrip(b"\n")
+                    kind, _, rest = line.partition(b" ")
+                    if kind == b"D":
+                        yield "D", base64.b64decode(rest)
+                    elif kind == b"C":
+                        try:
+                            yield "C", json.loads(rest.decode("utf-8"))
+                        except ValueError:
+                            yield "C", ""
+                        return
+                    elif kind:
+                        yield kind.decode("ascii", "replace"), None
+            finally:
+                conn.close()
+
+        return 200, frames()
+
+    def close(self):
+        if self._up is not None:
+            try:
+                self._up.close()
+            except OSError:
+                pass
+            self._up = None
+        conn, self._stream = self._stream, None
+        if conn is not None:
+            # 다른 스레드가 이 연결에서 readline 으로 기다리고 있다. 윈도우에서는
+            # close 만으로 그 대기가 풀리지 않는다. shutdown 이 풀어 준다.
+            try:
+                conn.sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+def send_chunks(link, path, seq_box, data, stop):
+    """
+    조각 하나를 올린다. 실패하면 **같은 순번으로** 다시 보낸다(서버는 같은
+    순번을 두 번 받으면 두 번째를 버린다). 반환: 계속해도 되는가.
+    """
+    seq_box[0] += 1
+    payload = {"seq": seq_box[0], "data": base64.b64encode(data).decode("ascii")}
+    delay = 0.2
+    for _ in range(20):
+        if stop.is_set():
+            return False
+        try:
+            status, _res = link.post(path, payload)
+        except (OSError, http.client.HTTPException):
+            time.sleep(delay)
+            delay = min(2.0, delay * 2)
+            continue
+        if status == 200:
+            return True
+        if status == 503:              # 반대편이 못 따라온다. 같은 순번으로 다시
+            time.sleep(0.2)
+            continue
+        return False                   # 409(순서) · 410(닫힘) · 403 · 401
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +622,138 @@ class Terminal(object):
 
 
 # ---------------------------------------------------------------------------
+# PuTTY 터널
+# ---------------------------------------------------------------------------
+class Tunnel(object):
+    """
+    대상 서버로 가는 소켓 하나와 챗봇 서버로 가는 HTTP 두 줄.
+
+    주소는 서버가 보낸 것(관리자가 DB 에 적은 값)이다. 자격증명은 오지 않는다.
+    ssh 도 plink 도 쓰지 않는다 — 키 파일 · 호스트 키 · 비밀번호가 여기에는 없다.
+    """
+
+    def __init__(self, agent, tunnel_id, host, port):
+        self.agent = agent
+        self.id = tunnel_id
+        self.host = host
+        self.port = int(port)
+        self.sock = None
+        self.stop = threading.Event()
+        cfg = agent.cfg
+        self.link = Link(cfg["url"], {"X-Relay-Key": cfg.get("agent_key") or "",
+                                      "User-Agent": "claude-relay/%s" % VERSION},
+                         insecure=bool(cfg.get("insecure")))
+        self.down_link = Link(cfg["url"], self.link.headers,
+                              insecure=bool(cfg.get("insecure")))
+
+    def start(self):
+        threading.Thread(target=self._run, name="tunnel-%s" % self.id[:8],
+                         daemon=True).start()
+
+    def _path(self, tail):
+        return "/api/relay/tunnel/%s/%s" % (self.id, tail)
+
+    def _run(self):
+        try:
+            self.sock = socket.create_connection((self.host, self.port), timeout=8)
+        except OSError as exc:
+            log("터널 %s : %s:%s 에 닿지 못했습니다 (%s)"
+                % (self.id[:8], self.host, self.port, exc))
+            self._report(False, str(exc)[:160])
+            self.agent.tunnels.pop(self.id, None)
+            return
+        self.sock.settimeout(None)
+        try:
+            # 키 하나가 바로 나가야 한다. Nagle 이 모아 두면 PuTTY 가 굼떠 보인다.
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        self._report(True, "")
+        log("터널 %s : %s:%s 열림" % (self.id[:8], self.host, self.port))
+        threading.Thread(target=self._up, name="tunnel-up-%s" % self.id[:8],
+                         daemon=True).start()
+        try:
+            self._down()
+        finally:
+            self.close()
+
+    def _report(self, ok, error):
+        try:
+            self.link.post(self._path("opened"), {"ok": ok, "error": error})
+        except (OSError, http.client.HTTPException) as exc:
+            log("터널 %s : 열림을 알리지 못했습니다 (%s)" % (self.id[:8], exc))
+
+    def _down(self):
+        """챗봇 서버 → 대상. 프레임을 받아 소켓에 쓴다."""
+        try:
+            status, frames = self.down_link.stream(self._path("down"))
+        except (OSError, http.client.HTTPException) as exc:
+            log("터널 %s : 아래 스트림을 열지 못했습니다 (%s)" % (self.id[:8], exc))
+            return
+        if status != 200:
+            log("터널 %s : 아래 스트림 거절 (%s)" % (self.id[:8], status))
+            return
+        try:
+            for kind, value in frames:
+                if self.stop.is_set():
+                    return
+                if kind == "D":
+                    self.sock.sendall(value)
+                elif kind == "C":
+                    log("터널 %s : 닫힘 (%s)" % (self.id[:8], value))
+                    return
+        except (OSError, http.client.HTTPException, ValueError) as exc:
+            log("터널 %s : 아래 스트림이 끊겼습니다 (%s)" % (self.id[:8], exc))
+
+    def _up(self):
+        """대상 → 챗봇 서버. 소켓에서 읽어 순번을 붙여 올린다."""
+        seq = [0]
+        why = "대상 서버가 연결을 끊었습니다"
+        while not self.stop.is_set():
+            try:
+                data = self.sock.recv(32768)
+            except OSError:
+                data = b""
+            if not data:
+                break
+            if not send_chunks(self.link, self._path("up"), seq, data, self.stop):
+                why = ""
+                break
+        if why and not self.stop.is_set():
+            try:
+                self.link.post(self._path("close"), {"reason": why})
+            except (OSError, http.client.HTTPException):
+                pass
+        self.close()
+
+    def close(self, why=None):
+        """
+        닫는다. why 를 주면 챗봇 서버에 이유를 알린다(중계가 스스로 닫는 경우).
+        서버가 먼저 닫은 경우에는 why 없이 부른다 — 서버가 이미 안다.
+        """
+        if self.stop.is_set():
+            return
+        self.stop.set()
+        if why:
+            try:
+                self.link.post(self._path("close"), {"reason": why}, timeout=5)
+            except (OSError, http.client.HTTPException):
+                pass
+        self.down_link.close()
+        if self.sock is not None:
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+        self.link.close()
+        self.agent.tunnels.pop(self.id, None)
+
+
+# ---------------------------------------------------------------------------
 # 본 루프
 # ---------------------------------------------------------------------------
 class Agent(object):
@@ -476,6 +763,7 @@ class Agent(object):
                              insecure=bool(cfg.get("insecure")))
         self.out = queue.Queue()
         self.terms = {}
+        self.tunnels = {}
         self.stop = threading.Event()
         self.poll_seconds = 25
 
@@ -612,14 +900,32 @@ class Agent(object):
                 threading.Thread(target=self.handle, args=(job,),
                                  name="job-%s" % job.get("id"), daemon=True).start()
 
+            # 열어야 할 터널. 주소는 서버가 DB 에서 꺼낸 값이다.
+            for t in (res.get("tunnels") or []):
+                tid = t.get("tunnel_id")
+                if not tid or tid in self.tunnels:
+                    continue
+                tunnel = Tunnel(self, tid, t.get("host"), t.get("port") or 22)
+                self.tunnels[tid] = tunnel
+                tunnel.start()
+
             # 열려 있어야 할 터미널만 남긴다 (웹에서 닫힌 것 정리)
             keep = set(res.get("open_terms") or [])
             for term_id in list(self.terms):
                 if term_id not in keep:
                     self._close_term(term_id, "웹에서 닫혔습니다")
+            # 터널도 같다. 서버가 닫은 터널의 소켓을 남겨 두지 않는다.
+            if "open_tunnels" in res:
+                keep = set(res.get("open_tunnels") or [])
+                for tid, tunnel in list(self.tunnels.items()):
+                    if tid not in keep:
+                        tunnel.close()
 
         for term_id in list(self.terms):
             self._close_term(term_id, "중계가 멈췄습니다")
+        for tunnel in list(self.tunnels.values()):
+            # 바이트가 중계를 지나가므로 중계가 멈추면 터널도 끊긴다. 이유를 남긴다.
+            tunnel.close("VDI 중계가 멈췄습니다")
         log("중계 종료")
 
 

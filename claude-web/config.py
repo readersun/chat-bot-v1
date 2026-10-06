@@ -232,6 +232,7 @@ SETTINGS_BOOTSTRAP = {
     "relay_term_idle_seconds": str(env_int("RELAY_TERM_IDLE_SECONDS", 180)),
     "relay_chat_max_commands": str(env_int("RELAY_CHAT_MAX_COMMANDS", 3)),
     "relay_queue_keep_days": str(env_int("RELAY_QUEUE_KEEP_DAYS", 90)),
+    "relay_tunnel_idle_seconds": str(env_int("RELAY_TUNNEL_IDLE_SECONDS", 600)),
 }
 
 # ---------------------------------------------------------------------------
@@ -266,3 +267,23 @@ RELAY_DIR = os.path.abspath(
 
 # 올릴 수 있는 최대 크기. PyInstaller 한 파일은 보통 8~15MB 다.
 RELAY_PROGRAM_MAX_MB = env_int("RELAY_PROGRAM_MAX_MB", 64)
+
+# ---------------------------------------------------------------------------
+# PuTTY 터널
+# ---------------------------------------------------------------------------
+# gunicorn 스레드 수. deploy/gunicorn.conf.py 와 같은 환경변수를 읽는다.
+# 터널 하나는 아래로 흐르는 스트림 두 개(클라이언트 쪽, 중계 쪽)가 스레드를
+# 하나씩 쥔다. 중계의 롱폴도 하나씩 쥔다. 그래서 터널을 더 열기 전에 채팅 몫을
+# 남겨 두고 계산한다. (tunnel_store.capacity_left)
+GUNICORN_THREADS = env_int("GUNICORN_THREADS", 32)
+TUNNEL_RESERVED_THREADS = env_int("TUNNEL_RESERVED_THREADS", 12)
+
+# 한 방향에 쌓아 둘 수 있는 바이트. 넘으면 보내는 쪽을 잠깐 기다리게 한다.
+TUNNEL_BUFFER_BYTES = env_int("TUNNEL_BUFFER_BYTES", 1024 * 1024)
+
+# 아래 스트림에 빈 심박을 보내는 간격. nginx proxy_read_timeout(360초)보다
+# 훨씬 짧아야 한다. 끊긴 연결을 알아채는 시간도 이 값이다.
+TUNNEL_HEARTBEAT_SECONDS = env_int("TUNNEL_HEARTBEAT_SECONDS", 15)
+
+# 이 버전보다 낮은 클라이언트에는 터널을 열어 주지 않는다.
+CLIENT_MIN_VERSION = os.getenv("CLIENT_MIN_VERSION", "1.0.0")

@@ -489,6 +489,65 @@ def ssh_level(db, user):
     return mine if _SSH_RANK[mine] <= _SSH_RANK[cap] else cap
 
 
+# ---------------------------------------------------------------------------
+# 셸 열기 (users.ssh_shell)
+#
+# 등급(ssh_level)은 **챗봇이 고른 명령**에 걸린다. 웹 콘솔과 터널은 사람이
+# 직접 치는 셸이라 등급이 걸리지 않는다. 그래서 등급만 보고 셸을 열어 주면
+# 「조회」 등급인 사람도 제약 없는 셸을 얻는다. 셸은 이 칸으로 따로 준다.
+#
+#   off     : 채팅만 쓴다. 셸을 열 수 없다
+#   console : 웹 콘솔. 엔터로 끝난 줄이 기록에 남는다
+#   tunnel  : 웹 콘솔 + PuTTY 터널. 터널은 암호문만 지나가므로 기록이 없다
+#
+# 등급이 꺼져 있으면 셸도 꺼진다. 서버를 쓸 수 없는 사람에게 셸만 남을 수 없다.
+# ---------------------------------------------------------------------------
+SHELL_OFF = "off"
+SHELL_CONSOLE = "console"
+SHELL_TUNNEL = "tunnel"
+SHELL_LEVELS = (SHELL_OFF, SHELL_CONSOLE, SHELL_TUNNEL)
+
+_SHELL_RANK = {SHELL_OFF: 0, SHELL_CONSOLE: 1, SHELL_TUNNEL: 2}
+
+SHELL_LEVEL_LABELS = {
+    SHELL_OFF: "끔 (채팅만)",
+    SHELL_CONSOLE: "웹 콘솔만",
+    SHELL_TUNNEL: "웹 콘솔 + PuTTY 터널",
+}
+
+
+def _stored_shell(user):
+    try:
+        v = (user["ssh_shell"] or SHELL_OFF).strip().lower()
+    except (IndexError, KeyError):
+        return SHELL_OFF        # 마이그레이션 전 행. 아무것도 열지 않는다.
+    return v if v in SHELL_LEVELS else SHELL_OFF
+
+
+def shell_level(db, user):
+    """그 사람이 열 수 있는 셸. 등급이 꺼져 있으면 꺼진다."""
+    if not user or ssh_level(db, user) == SSH_OFF:
+        return SHELL_OFF
+    if is_admin(user):
+        return SHELL_TUNNEL
+    return _stored_shell(user)
+
+
+def can_open_shell(db, user, need):
+    return _SHELL_RANK[shell_level(db, user)] >= _SHELL_RANK[need]
+
+
+def require_shell(db, user, need):
+    """셸을 열 수 있는지. 못 열면 403 이다. 화면의 단추와 상관없이 여기서 막는다."""
+    if can_open_shell(db, user, need):
+        return
+    if need == SHELL_TUNNEL:
+        abort(403, "PuTTY 터널을 열 허용이 없습니다. 관리자에게 요청하세요. "
+                   "이 서버는 채팅으로 물어볼 수 있습니다.")
+    abort(403, "셸을 열 허용이 없습니다. 관리자에게 요청하세요. "
+               "이 서버는 채팅으로 물어볼 수 있습니다.")
+
+
 def ssh_can_read(db, user):
     return _SSH_RANK[ssh_level(db, user)] >= 1
 
@@ -561,12 +620,14 @@ def require_server(db, user, server_row):
               % server_row["name"])
 
 
-def set_user_ssh(db, user_id, level, all_servers, server_ids, granted_by=None):
+def set_user_ssh(db, user_id, level, all_servers, server_ids, granted_by=None,
+                 shell=None):
     """
     한 사람의 등급과 범위를 통째로 교체한다. 반환: (등급, 남은 서버 id 목록)
 
     등급을 끄면 범위도 비운다. 꺼진 사람의 표에 서버가 남아 있으면 다음에 다시
-    켤 때 예전 범위가 조용히 되살아난다.
+    켤 때 예전 범위가 조용히 되살아난다. 셸도 같은 이유로 함께 끈다.
+    shell 을 주지 않으면 셸 칸은 그대로 둔다(등급을 끄는 경우만 빼고).
     """
     from db import ts
     lv = (level or SSH_OFF).strip().lower()
@@ -575,6 +636,12 @@ def set_user_ssh(db, user_id, level, all_servers, server_ids, granted_by=None):
     all_flag = 1 if (all_servers and lv != SSH_OFF) else 0
     db.execute("UPDATE users SET ssh_level = ?, ssh_all_servers = ? WHERE id = ?",
                (lv, all_flag, user_id))
+    if lv == SSH_OFF:
+        db.execute("UPDATE users SET ssh_shell = ? WHERE id = ?", (SHELL_OFF, user_id))
+    elif shell is not None:
+        sh = (shell or SHELL_OFF).strip().lower()
+        db.execute("UPDATE users SET ssh_shell = ? WHERE id = ?",
+                   (sh if sh in SHELL_LEVELS else SHELL_OFF, user_id))
     db.execute("DELETE FROM ssh_grants WHERE user_id = ?", (user_id,))
     keep = []
     if lv != SSH_OFF and not all_flag:

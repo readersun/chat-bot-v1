@@ -228,6 +228,12 @@ def agent_by_key(db, key):
         (_hash(key),)).fetchone()
 
 
+def agent_revoked(db, agent_id):
+    row = db.execute("SELECT revoked_at FROM relay_agents WHERE id = ?",
+                     (agent_id,)).fetchone()
+    return row is None or row["revoked_at"] is not None
+
+
 def touch_agent(db, agent_id, ip=None, scheme=None):
     if ip is None and scheme is None:
         db.execute("UPDATE relay_agents SET last_seen_at = ? WHERE id = ?",
@@ -841,19 +847,34 @@ PROGRAM_META = "program.json"
 # 올릴 수 있는 확장자. 받는 사람이 그대로 실행하는 파일이라 좁게 둔다.
 PROGRAM_EXTS = (".exe", ".py", ".zip")
 
+# 프로그램은 두 가지다. 서로 다른 PC 로 가는 다른 프로그램이라 칸을 나눈다.
+#   relay  : VDI 안에서 도는 중계 (relay.exe + plink.exe)
+#   client : 사용자의 바깥 PC 에서 도는 클라이언트 (claude-term.exe + putty.exe)
+# relay 의 파일 이름은 예전 그대로 둔다. 이미 올려 둔 것이 그대로 보여야 한다.
+PROGRAM_KINDS = {
+    "relay": {"stem": "relay", "meta": PROGRAM_META},
+    "client": {"stem": "client", "meta": "client-program.json"},
+}
+
 
 def program_dir():
     return config.RELAY_DIR
 
 
-def _program_meta_path():
-    return os.path.join(program_dir(), PROGRAM_META)
+def _kind(kind):
+    if kind not in PROGRAM_KINDS:
+        raise ValueError("모르는 프로그램 종류입니다.")
+    return PROGRAM_KINDS[kind]
 
 
-def program_info():
+def _program_meta_path(kind="relay"):
+    return os.path.join(program_dir(), _kind(kind)["meta"])
+
+
+def program_info(kind="relay"):
     """지금 올라와 있는 프로그램의 설명. 없으면 None."""
     try:
-        with open(_program_meta_path(), "r", encoding="utf-8") as f:
+        with open(_program_meta_path(kind), "r", encoding="utf-8") as f:
             meta = json.load(f)
     except (IOError, OSError, ValueError):
         return None
@@ -864,7 +885,7 @@ def program_info():
     return meta
 
 
-def save_program(fileobj, filename, user_id, username):
+def save_program(fileobj, filename, user_id, username, kind="relay"):
     """
     프로그램을 바꾼다. 반환: 설명 dict
 
@@ -876,7 +897,7 @@ def save_program(fileobj, filename, user_id, username):
         raise ValueError("올릴 수 있는 것은 %s 입니다." % ", ".join(PROGRAM_EXTS))
 
     os.makedirs(program_dir(), exist_ok=True)
-    stored = "relay" + ext
+    stored = _kind(kind)["stem"] + ext
     tmp = os.path.join(program_dir(), stored + ".part")
     limit = config.RELAY_PROGRAM_MAX_MB * 1024 * 1024
 
@@ -924,18 +945,18 @@ def save_program(fileobj, filename, user_id, username):
         "uploaded_by": username,
         "uploaded_by_id": user_id,
     }
-    with open(_program_meta_path(), "w", encoding="utf-8") as f:
+    with open(_program_meta_path(kind), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     meta["path"] = final
     return meta
 
 
-def remove_program():
+def remove_program(kind="relay"):
     """올려 둔 프로그램을 치운다. 반환: 지웠는지 여부"""
-    meta = program_info()
+    meta = program_info(kind)
     if meta is None:
         return False
-    for path in (meta["path"], _program_meta_path()):
+    for path in (meta["path"], _program_meta_path(kind)):
         try:
             os.remove(path)
         except OSError:

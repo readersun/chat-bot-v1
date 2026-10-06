@@ -31,6 +31,7 @@ from flask import Blueprint, Response, abort, jsonify, render_template, request
 import config
 import permissions as _perm
 import relay_store as store
+import tunnel_store
 import settings_store
 import ssh_policy
 from auth import admin_required, csrf_token, current_user, public_user
@@ -46,7 +47,7 @@ TAB_TITLES = {"connect": "중계 설정", "grants": "사용 허용", "log": "기
 SETTING_KEYS = ("relay_policy", "relay_poll_seconds", "relay_run_timeout",
                 "relay_approval_seconds", "relay_term_max_per_user",
                 "relay_term_idle_seconds", "relay_chat_max_commands",
-                "relay_queue_keep_days")
+                "relay_queue_keep_days", "relay_tunnel_idle_seconds")
 
 
 def _page(tab):
@@ -106,6 +107,7 @@ def summary():
 
     settings = {k: settings_store.get(db, k, "") for k in SETTING_KEYS}
     prog = store.program_info()
+    cprog = store.program_info("client")
     return jsonify(
         ok=True,
         connected=bool(live),
@@ -121,6 +123,9 @@ def summary():
         program=({"name": prog["name"], "size": prog["size"],
                   "sha256": prog["sha256"], "uploaded_at": prog["uploaded_at"],
                   "uploaded_by": prog["uploaded_by"]} if prog else None),
+        client_program=({"name": cprog["name"], "size": cprog["size"],
+                         "sha256": cprog["sha256"], "uploaded_at": cprog["uploaded_at"],
+                         "uploaded_by": cprog["uploaded_by"]} if cprog else None),
         program_max_mb=config.RELAY_PROGRAM_MAX_MB,
         counts=row_to_dict(today),
         settings=settings,
@@ -164,6 +169,14 @@ def _insecure_warning(db, agents):
             "키 인증으로 바꾸세요." % (len(plain), n))
 
 
+def _program_kind():
+    """?kind=relay|client. 없으면 relay (예전 화면이 그대로 동작한다)."""
+    kind = (request.args.get("kind") or "relay").strip().lower()
+    if kind not in store.PROGRAM_KINDS:
+        abort(400, "프로그램 종류가 올바르지 않습니다.")
+    return kind
+
+
 @api.post("/program")
 @admin_required
 def upload_program():
@@ -175,15 +188,16 @@ def upload_program():
     받는 화면에는 sha256 을 함께 보여 준다.
     """
     db, user = get_db(), current_user()
+    kind = _program_kind()
     f = request.files.get("file")
     if f is None or not f.filename:
         abort(400, "파일을 고르세요.")
     try:
         meta = store.save_program(f.stream, f.filename, user["id"],
-                                  user["display_name"] or user["username"])
+                                  user["display_name"] or user["username"], kind=kind)
     except ValueError as exc:
         abort(400, str(exc))
-    audit(db, user["id"], "relay_program_uploaded", "relay", "",
+    audit(db, user["id"], "%s_program_uploaded" % kind, kind, "",
           "name=%s size=%d sha256=%s" % (meta["name"], meta["size"],
                                          meta["sha256"][:12]))
     db.commit()
@@ -198,9 +212,10 @@ def upload_program():
 def delete_program():
     """올려 둔 프로그램을 내린다. 받는 길이 닫힌다."""
     db, user = get_db(), current_user()
-    if not store.remove_program():
+    kind = _program_kind()
+    if not store.remove_program(kind):
         abort(404, "올라와 있는 프로그램이 없습니다.")
-    audit(db, user["id"], "relay_program_removed", "relay", "", "")
+    audit(db, user["id"], "%s_program_removed" % kind, kind, "", "")
     db.commit()
     return jsonify(ok=True)
 
@@ -224,6 +239,9 @@ def revoke():
     closed = (store.close_user_terms(db, row["owner_id"],
                                      "관리자가 중계 연결을 끊었습니다")
               if row["owner_id"] else 0)
+    if row["owner_id"]:
+        tunnel_store.close_user_tunnels(db, row["owner_id"],
+                                        "관리자가 VDI 중계 연결을 끊어 터널을 닫았습니다")
     audit(db, user["id"], "relay_revoked", "relay", agent_id,
           "name=%s owner=%s terms_closed=%d"
           % (row["name"], row["owner_id"], closed))
@@ -262,7 +280,8 @@ def list_grants():
     servers = db.execute(
         "SELECT id, name, host, is_enabled FROM ssh_servers ORDER BY name").fetchall()
     users = db.execute(
-        "SELECT id, username, display_name, role, is_active, ssh_level, ssh_all_servers"
+        "SELECT id, username, display_name, role, is_active, ssh_level, ssh_all_servers,"
+        " ssh_shell"
         " FROM users ORDER BY role != 'admin', username").fetchall()
     rows = db.execute("SELECT user_id, server_id FROM ssh_grants").fetchall()
     by_user = {}
@@ -282,6 +301,7 @@ def list_grants():
             "role": u["role"], "is_active": bool(u["is_active"]),
             "level": _perm.ssh_level(db, u) if is_admin else (u["ssh_level"] or "off"),
             "all_servers": True if is_admin else bool(u["ssh_all_servers"]),
+            "shell": _perm.shell_level(db, u),
             "server_ids": sorted(by_user.get(u["id"], [])),
             "has_menu": is_admin or u["id"] in has_menu,
             # 관리자는 이 표를 스스로 고칠 수 있다. 줄은 보여 주되 잠근다.
@@ -291,7 +311,9 @@ def list_grants():
                    servers=[row_to_dict(s) for s in servers],
                    policy=_perm.ssh_policy(db),
                    levels=[{"key": k, "label": _perm.SSH_LEVEL_LABELS[k]}
-                           for k in _perm.SSH_LEVELS])
+                           for k in _perm.SSH_LEVELS],
+                   shells=[{"key": k, "label": _perm.SHELL_LEVEL_LABELS[k]}
+                           for k in _perm.SHELL_LEVELS])
 
 
 @api.put("/grants/<int:uid>")
@@ -327,31 +349,57 @@ def put_grants(uid):
         abort(400, "서버 목록이 올바르지 않습니다.")
     if level != "off" and not all_servers and not ids:
         abort(400, "범위를 '고른 서버만' 으로 두면 서버를 하나 이상 골라야 합니다.")
+    shell = data.get("shell")
+    if shell is not None:
+        shell = (shell or "off").strip().lower()
+        if shell not in _perm.SHELL_LEVELS:
+            abort(400, "셸 열기 값이 올바르지 않습니다.")
 
-    lv, keep = _perm.set_user_ssh(db, uid, level, all_servers, ids, user["id"])
+    before_shell = _perm.shell_level(db, row)
+    before_ids = _perm.allowed_server_ids(db, row)
+    lv, keep = _perm.set_user_ssh(db, uid, level, all_servers, ids, user["id"],
+                                  shell=shell)
+    after = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    after_shell = _perm.shell_level(db, after)
 
     menus = set(_perm.user_menus(db, row))
     if lv == "off":
         menus.discard("servers")
-        closed = store.close_user_terms(db, uid, "사용 허용이 해제되었습니다")
     else:
         menus.add("servers")
-        closed = 0
     _perm.set_user_menus(db, uid, menus, user["id"])
 
+    # 줄어든 것이 있으면 그 자리에서 닫는다. 다음 청소까지 기다리면 허용이
+    # 사라진 뒤에도 셸이 몇 초 살아 있다. 범위가 줄어든 경우도 같다
+    # (어느 서버가 빠졌는지 따로 가리지 않고 그 사람의 셸을 모두 닫는다).
+    narrowed = (before_ids is None and not (all_servers and lv != "off")) or (
+        before_ids is not None and not set(before_ids) <= set(keep)
+        and not all_servers)
+    closed = tunnels = 0
+    reason = "사용 허용이 바뀌어 닫았습니다"
+    if lv == "off" or after_shell == _perm.SHELL_OFF or narrowed:
+        closed = store.close_user_terms(db, uid, reason)
+    if lv == "off" or after_shell != _perm.SHELL_TUNNEL or narrowed:
+        tunnels = tunnel_store.close_user_tunnels(db, uid, reason)
+
     audit(db, user["id"], "ssh_grants_changed", "user", uid,
-          "level=%s all=%s servers=%s terms_closed=%d"
-          % (lv, all_servers, ",".join(str(x) for x in keep) or "-", closed))
+          "level=%s shell=%s->%s all=%s servers=%s terms_closed=%d tunnels_closed=%d"
+          % (lv, before_shell, after_shell, all_servers,
+             ",".join(str(x) for x in keep) or "-", closed, tunnels))
     db.commit()
     store.wake()
-    return jsonify(ok=True, level=lv, all_servers=all_servers, server_ids=keep,
-                   terminals_closed=closed, menus=sorted(menus))
+    return jsonify(ok=True, level=lv, shell=after_shell, all_servers=all_servers,
+                   server_ids=keep, terminals_closed=closed, tunnels_closed=tunnels,
+                   menus=sorted(menus))
 
 
 # ---------------------------------------------------------------------------
 # 기록
 # ---------------------------------------------------------------------------
 SOURCE_LABELS = {"chat": "채팅", "term": "터미널", "setup": "설정"}
+
+_TUNNEL_STATE_LABELS = {"open": "열려 있음", "opening": "여는 중", "closed": "닫힘",
+                        "failed": "열지 못함"}
 
 # 기록에 함께 싣는 운영 행위. 값은 화면에 쓸 문장이다.
 _AUDIT_ACTIONS = {
@@ -365,7 +413,20 @@ _AUDIT_ACTIONS = {
     "relay_register_failed": "중계 등록 실패",
     "ssh_grants_changed": "사용 허용 변경",
     "relay_settings_changed": "중계 설정 변경",
+    "client_registered": "클라이언트 등록",
+    "client_revoked": "클라이언트 해제",
+    "client_enroll_code_issued": "클라이언트 등록 코드 발급",
+    "client_register_failed": "클라이언트 등록 실패",
 }
+
+
+def _bytes_text(n):
+    n = int(n or 0)
+    if n < 1024:
+        return "%d B" % n
+    if n < 1048576:
+        return "%.1f KB" % (n / 1024.0)
+    return "%.1f MB" % (n / 1048576.0)
 
 
 def _filters():
@@ -384,7 +445,7 @@ def _filters():
     except (TypeError, ValueError):
         server_id = None
     kind = (args.get("kind") or "all").lower()
-    if kind not in ("all", "read", "write", "term", "setup"):
+    if kind not in ("all", "read", "write", "term", "tunnel", "setup"):
         kind = "all"
     return days, user_id, server_id, kind
 
@@ -472,6 +533,45 @@ def _log_rows(db, days, user_id, server_id, kind, limit=300):
                 "state_label": {"open": "열려 있음", "opening": "열고 있음",
                                 "closed": "닫힘", "failed": "실패"}.get(r["state"],
                                                                       r["state"]),
+                "end": r["close_reason"] or "",
+                "approver": "",
+                "approved_at": None,
+                "reason": "",
+                "ref": r["id"],
+            })
+
+    if kind in ("all", "tunnel"):
+        # PuTTY 터널. 암호문만 지나가므로 **무엇을 쳤는지는 여기에도 어디에도 없다.**
+        # 누가 · 언제 · 어느 서버 · 얼마나 · 몇 바이트 · 어디서(클라이언트 IP)만.
+        sql = ("SELECT t.*, u.username, u.display_name, s.name AS server_name"
+               " FROM tunnel_sessions t"
+               " LEFT JOIN users u ON u.id = t.user_id"
+               " LEFT JOIN ssh_servers s ON s.id = t.server_id"
+               " WHERE t.opened_at >= " + since)
+        params = []
+        if user_id:
+            sql += " AND t.user_id = ?"
+            params.append(user_id)
+        if server_id:
+            sql += " AND t.server_id = ?"
+            params.append(server_id)
+        sql += " ORDER BY t.opened_at DESC LIMIT ?"
+        params.append(limit)
+        for r in db.execute(sql, params):
+            out.append({
+                "at": r["opened_at"],
+                "kind": "tunnel",
+                "who": r["display_name"] or r["username"] or "(삭제된 사용자)",
+                "server": r["server_name"] or "(삭제된 서버)",
+                "where": "PuTTY 터널",
+                "what": "%s · 올림 %s · 내림 %s · %s" % (
+                    _duration(r["opened_at"], r["closed_at"]),
+                    _bytes_text(r["bytes_up"]), _bytes_text(r["bytes_down"]),
+                    r["client_ip"] or "-"),
+                "level": "human",
+                "level_label": "사람이 직접",
+                "state": r["state"],
+                "state_label": _TUNNEL_STATE_LABELS.get(r["state"], r["state"]),
                 "end": r["close_reason"] or "",
                 "approver": "",
                 "approved_at": None,

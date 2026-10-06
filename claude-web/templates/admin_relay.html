@@ -278,8 +278,10 @@ td.cmd {
       help: "넘기면 중계가 끊고 실패로 올린다" },
     { key: "relay_approval_seconds", label: "승인 대기 (초)", min: 30, max: 600,
       help: "이 시간 안에 안 누르면 취소된다" },
-    { key: "relay_term_max_per_user", label: "한 사람 동시 터미널", min: 1, max: 4,
-      help: "올리면 채팅이 느려진다" },
+    { key: "relay_term_max_per_user", label: "한 사람 동시 셸", min: 1, max: 4,
+      help: "웹 콘솔과 PuTTY 터널을 합쳐 센다. 올리면 채팅이 느려진다" },
+    { key: "relay_tunnel_idle_seconds", label: "PuTTY 터널 자동 닫기 (초)", min: 60, max: 3600,
+      help: "아무 바이트도 지나가지 않으면 닫는다. 심박은 세지 않는다" },
     { key: "relay_term_idle_seconds", label: "터미널 자동 닫기 (초)", min: 30, max: 1800,
       help: "브라우저가 이만큼 조용하면 닫는다" },
     { key: "relay_chat_max_commands", label: "한 질문당 명령 수", min: 1, max: 5,
@@ -344,8 +346,23 @@ td.cmd {
                   + "「내 중계」에서 프로그램을 받아 설치하고 등록 코드를 넣습니다." })
     ]));
 
-    /* --- 중계 프로그램 --- */
-    var prog = d.program;
+    /* --- 내려받는 프로그램 둘. 서로 다른 PC 로 가는 다른 프로그램이다 --- */
+    content.appendChild(programBlock("relay", d.program, d.program_max_mb,
+      "중계 프로그램 · VDI 안에서 돈다",
+      "VDI 에서 돌릴 relay.exe 를 여기에 한 번 올려 둡니다. 비밀번호 인증을 "
+      + "쓰면 plink.exe 를 같은 폴더에 넣어 zip 으로 묶어 올리세요. 중계가 "
+      + "자기 옆의 plink 를 먼저 찾으므로 VDI 마다 PuTTY 를 설치하지 않아도 "
+      + "됩니다. 만드는 방법은 relay_agent/README.md 에 있습니다."));
+    content.appendChild(programBlock("client", d.client_program, d.program_max_mb,
+      "사용자 클라이언트 · 바깥 PC 에서 돈다",
+      "claude-term.exe 와 putty.exe 를 한 폴더에 담아 zip 으로 올립니다. 한 겹 더 "
+      + "싸지 말고 둘이 나란히 있어야 합니다(클라이언트는 자기 옆의 putty.exe 만 "
+      + "찾습니다). 「셸 열기」 가 「PuTTY 터널」 인 사람만 서버 화면에서 등록 코드를 "
+      + "받을 수 있습니다. 만드는 방법은 client_app/README.md 에 있습니다."));
+    return renderToday(d);
+  }
+
+  function programBlock(kind, prog, maxMb, title, desc) {
     var progKids = [];
     if (prog) {
       progKids.push(kv([
@@ -360,25 +377,25 @@ td.cmd {
         text: "아직 올라와 있지 않습니다. 올리기 전에는 사용자가 받을 수 없습니다." }));
     }
 
-    var picker = el("input", { type: "file", id: "prog-file",
+    var picker = el("input", { type: "file", id: "prog-file-" + kind,
                                accept: ".exe,.py,.zip" });
     progKids.push(el("div", { class: "row-gap", style: "margin-top:var(--s4)" }, [
       picker,
-      el("button", { class: "btn primary", type: "button", onclick: uploadProgram },
+      el("button", { class: "btn primary", type: "button",
+                     onclick: function () { uploadProgram(kind); } },
          [prog ? "바꾸기" : "올리기"]),
       prog ? el("button", { class: "btn danger", type: "button",
-                            onclick: removeProgram }, ["내리기"]) : null
+                            onclick: function () { removeProgram(kind); } },
+                ["내리기"]) : null
     ]));
     progKids.push(el("p", { class: "desc", style: "margin-top:var(--s3)",
       text: "사용자는 서버 화면에서 이 파일을 받습니다. 받는 화면에 sha256 이 함께 "
             + "보이므로, 받은 사람이 같은 파일인지 확인할 수 있습니다. 최대 "
-            + d.program_max_mb + "MB."}));
-    content.appendChild(block("중계 프로그램",
-      "VDI 에서 돌릴 relay.exe 를 여기에 한 번 올려 둡니다. 비밀번호 인증을 "
-      + "쓰면 plink.exe 를 같은 폴더에 넣어 zip 으로 묶어 올리세요. 중계가 "
-      + "자기 옆의 plink 를 먼저 찾으므로 VDI 마다 PuTTY 를 설치하지 않아도 "
-      + "됩니다. 만드는 방법은 relay_agent/README.md 에 있습니다.", progKids));
+            + maxMb + "MB."}));
+    return block(title, desc, progKids);
+  }
 
+  function renderToday(d) {
     /* --- 오늘 --- */
     var c = d.counts || {};
     content.appendChild(block("오늘", null, [
@@ -482,12 +499,12 @@ td.cmd {
     return (n / 1048576).toFixed(1) + " MB";
   }
 
-  function uploadProgram() {
-    var f = document.getElementById("prog-file").files[0];
+  function uploadProgram(kind) {
+    var f = document.getElementById("prog-file-" + kind).files[0];
     if (!f) { notify("파일을 고르세요.", "error"); return; }
     var fd = new FormData();
     fd.append("file", f);
-    fetch("/api/admin/relay/program", {
+    fetch("/api/admin/relay/program?kind=" + encodeURIComponent(kind), {
       method: "POST", credentials: "same-origin",
       headers: { "X-CSRF-Token": CSRF }, body: fd
     }).then(function (res) {
@@ -503,13 +520,15 @@ td.cmd {
     }).catch(function (e) { notify(e.message, "error"); });
   }
 
-  function removeProgram() {
-    modal({ title: "중계 프로그램 내리기",
+  function removeProgram(kind) {
+    var what = kind === "client" ? "클라이언트" : "중계";
+    modal({ title: what + " 프로그램 내리기",
             message: "올려 둔 파일을 지웁니다. 사용자가 받을 수 없게 됩니다.\n\n"
-                     + "이미 설치한 중계는 그대로 돕니다.",
+                     + "이미 설치한 " + what + " 는 그대로 돕니다.",
             confirmText: "내리기", danger: true }).then(function (yes) {
       if (!yes) { return null; }
-      return api("DELETE", "/api/admin/relay/program").then(function () {
+      return api("DELETE", "/api/admin/relay/program?kind=" + encodeURIComponent(kind))
+        .then(function () {
         notify("내렸습니다.");
         return load();
       });
@@ -544,12 +563,16 @@ td.cmd {
 
     content.appendChild(block("사용 허용",
       "등급과 범위를 함께 정합니다. 등급을 주면 「서버」 메뉴도 함께 열리고, "
-      + "끄면 함께 닫히고 그 사람이 열어 둔 터미널도 그 자리에서 닫힙니다.", [
+      + "끄면 함께 닫히고 그 사람이 열어 둔 터미널도 그 자리에서 닫힙니다. "
+      + "등급은 챗봇이 고르는 명령에만 걸립니다. 웹 콘솔과 PuTTY 터널은 사람이 "
+      + "직접 치는 제약 없는 셸이라 「셸 열기」 로 따로 줍니다. 셸을 줄이면 열려 있던 "
+      + "웹 콘솔과 터널이 그 자리에서 닫힙니다.", [
       el("div", { class: "table-wrap" }, [
         el("table", {}, [
           el("thead", {}, [el("tr", {}, [
             el("th", { scope: "col", text: "사람" }),
             el("th", { scope: "col", text: "등급" }),
+            el("th", { scope: "col", text: "셸 열기" }),
             el("th", { scope: "col", text: "범위" }),
             el("th", { scope: "col", text: "" })
           ])]),
@@ -582,6 +605,7 @@ td.cmd {
     if (u.locked) {
       tds.push(el("td", {}, [el("span", { class: "badge ok",
         text: d.levels.filter(function (x) { return x.key === u.level; })[0].label })]));
+      tds.push(el("td", { class: "muted", text: "웹 콘솔 + PuTTY 터널" }));
       tds.push(el("td", { class: "muted", text: "전체" }));
       tds.push(el("td", { class: "muted wrap",
         text: "관리자. 이 표로 막지 않는다." }));
@@ -594,6 +618,12 @@ td.cmd {
     sel.value = u.level;
     tds.push(el("td", {}, [sel]));
 
+    var shell = el("select", { "aria-label": "셸 열기" }, d.shells.map(function (x) {
+      return el("option", { value: x.key, text: x.label });
+    }));
+    shell.value = u.shell;
+    tds.push(el("td", {}, [shell]));
+
     var all = el("input", { type: "checkbox" });
     all.checked = u.all_servers;
     var picks = el("div", { class: "srv-picks" }, d.servers.map(function (s) {
@@ -601,7 +631,12 @@ td.cmd {
       cb.checked = u.server_ids.indexOf(s.id) >= 0;
       return el("label", {}, [cb, s.name + (s.is_enabled ? "" : " (꺼짐)")]);
     }));
-    function syncPicks() { picks.hidden = all.checked || sel.value === "off"; }
+    function syncPicks() {
+      picks.hidden = all.checked || sel.value === "off";
+      /* 등급이 꺼지면 셸도 꺼진다(서버가 그렇게 저장한다). 화면도 같게 보여 준다. */
+      shell.disabled = sel.value === "off";
+      if (sel.value === "off") { shell.value = "off"; }
+    }
     all.onchange = syncPicks;
     sel.onchange = syncPicks;
     syncPicks();
@@ -620,10 +655,11 @@ td.cmd {
       });
       btn.disabled = true;
       api("PUT", "/api/admin/relay/grants/" + u.id, {
-        level: sel.value, all_servers: all.checked, server_ids: ids
+        level: sel.value, all_servers: all.checked, server_ids: ids, shell: shell.value
       }).then(function (r) {
-        notify(u.display_name + " : " + r.level
-               + (r.terminals_closed ? " · 터미널 " + r.terminals_closed + "개 닫음" : ""));
+        notify(u.display_name + " : " + r.level + " · 셸 " + r.shell
+               + (r.terminals_closed ? " · 웹 콘솔 " + r.terminals_closed + "개 닫음" : "")
+               + (r.tunnels_closed ? " · 터널 " + r.tunnels_closed + "개 닫음" : ""));
         return load();
       }).catch(function (e) {
         notify(e.message, "error");
@@ -668,7 +704,7 @@ td.cmd {
 
     var chips = el("div", { class: "chips" },
       [["all", "전체"], ["read", "조회"], ["write", "변경"],
-       ["term", "터미널"], ["setup", "설정"]].map(function (x) {
+       ["term", "터미널"], ["tunnel", "PuTTY 터널"], ["setup", "설정"]].map(function (x) {
         var b = el("button", { type: "button", class: logState.kind === x[0] ? "on" : "",
                                text: x[1] });
         b.onclick = function () { logState.kind = x[0]; load(); };
@@ -702,6 +738,11 @@ td.cmd {
       el("p", { class: "desc", style: "margin-top:var(--s4)",
         text: "비밀번호와 키는 어느 줄에도 남지 않습니다. 비밀번호를 묻는 프롬프트 "
               + "뒤에 사람이 친 줄은 '(가려짐)' 으로 적힙니다." }),
+      el("p", { class: "desc",
+        text: "PuTTY 터널은 친 내용이 없습니다. 터널에는 암호문만 지나가므로 서버가 "
+              + "저장할 수 있는 것이 애초에 없습니다 — 관리자도 남의 세션을 열어 볼 수 "
+              + "없습니다. 무엇을 쳤는지가 필요하면 대상 서버 쪽(auditd · sshd 로그)에서 "
+              + "남겨야 합니다." }),
       el("p", { class: "desc",
         text: "지우거나 한꺼번에 비우는 단추는 만들지 않았습니다. 기록을 손댈 수 "
               + "있으면 기록이 아닙니다. 전송 큐(relay_jobs)의 끝난 행만 "

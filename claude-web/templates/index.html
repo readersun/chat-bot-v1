@@ -2641,6 +2641,16 @@ body.dragging #drop-hint { display: grid; }
           m.textContent = data.elapsed + "초 · " + (data.mode || "");
           listEl.lastChild.appendChild(m);
         }
+        /* 서버가 붙은 대화인데 답에 명령이 하나도 없었다. "확인해 보겠습니다"
+           로 끝난 답을 사용자가 기다리지 않게 그 사실을 적는다.
+           방금 받은 답에만 붙는다 — 기록에는 이 사실을 담을 칸이 없다. */
+        if (data.ssh && data.ssh.none) {
+          var nb = document.createElement("div");
+          nb.className = "meta";
+          nb.textContent = "이 답에서는 서버에 명령을 보내지 않았습니다. 서버를 직접 봐야 하면 " +
+                           "「서버에서 확인해 줘」 라고 다시 물어 주세요.";
+          listEl.lastChild.appendChild(nb);
+        }
         scrollToBottom();
         return loadSessions(state.sessionId);
       })

@@ -46,7 +46,12 @@ bind = os.getenv("GUNICORN_BIND", "127.0.0.1:8080")
 # --- 워커 ------------------------------------------------------------------
 workers = 1                       # 위 설명대로 반드시 1
 worker_class = "gthread"
-threads = _int("GUNICORN_THREADS", 8)
+# 스레드는 32개. PuTTY 터널은 아래로 흐르는 스트림 두 개가 스레드를 하나씩
+# 쥐고(클라이언트 쪽, 중계 쪽), 사람마다 있는 중계의 롱폴도 25초씩 하나를 쥔다.
+# 8개로는 중계 몇 대와 터널 하나면 채팅이 밀린다. 터널을 열기 전에 채팅 몫
+# (TUNNEL_RESERVED_THREADS, 기본 12)을 남겨 두고 계산한다 — tunnel_store.capacity_left.
+# 이 값은 config.GUNICORN_THREADS 가 같은 환경변수로 읽는다. 둘이 같아야 한다.
+threads = _int("GUNICORN_THREADS", 32)
 
 # --- 타임아웃 --------------------------------------------------------------
 # 반드시  Claude timeout(관리자 > Claude 설정) < gunicorn timeout < nginx proxy_read_timeout

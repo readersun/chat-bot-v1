@@ -14,9 +14,11 @@ Claude 도 부르지 않는다. 미리 정한 답을 돌려주는 가짜 provide
 """
 
 import atexit
+import base64
 import io
 import json
 import os
+import queue
 import re
 import shutil
 import sys
@@ -52,6 +54,7 @@ import db as db_module                                        # noqa: E402
 import permissions                                            # noqa: E402
 import relay_store as store                                   # noqa: E402
 import settings_store                                         # noqa: E402
+import tunnel_store                                           # noqa: E402
 
 APP = app_module.app
 
@@ -227,6 +230,9 @@ class Base(unittest.TestCase):
         """
         for term in store.HUB.all():
             store.HUB.drop(term.id)
+        for pipe in tunnel_store.HUB.all():
+            pipe.close("시험 정리")
+            tunnel_store.HUB.drop(pipe.id)
         c = conn()
         try:
             # 대화가 붙어 있는 서버는 그냥 지워지지 않는다(ON DELETE 규칙 없음).
@@ -236,12 +242,16 @@ class Base(unittest.TestCase):
                       "relay_enroll_codes", "relay_agents", "ssh_grants",
                       "ssh_servers", "messages", "sessions"):
                 c.execute("DELETE FROM %s" % t)
-            c.execute("UPDATE users SET ssh_level = 'off', ssh_all_servers = 0")
+            for t in ("tunnel_sessions", "client_enroll_codes", "client_agents"):
+                c.execute("DELETE FROM %s" % t)
+            c.execute("UPDATE users SET ssh_level = 'off', ssh_all_servers = 0,"
+                      " ssh_shell = 'off'")
             c.execute("DELETE FROM user_menus WHERE menu_key = 'servers'")
             c.commit()
         finally:
             c.close()
         store.remove_program()
+        store.remove_program("client")
         c = conn()
         try:
             pass
@@ -322,7 +332,13 @@ class Base(unittest.TestCase):
         self.assertEqual(code, 201, data)
         return data["server"]
 
-    def grant(self, username, level="read", all_servers=True, server_ids=()):
+    def grant(self, username, level="read", all_servers=True, server_ids=(),
+              shell="console"):
+        """
+        등급과 범위를 준다. 셸은 따로다(users.ssh_shell). 셸을 안 주는 경우를
+        보는 시험은 shell="off" 를 넘긴다. 기본을 웹 콘솔로 둔 것은 이 파일의
+        시험 대부분이 「셸을 열 수 있는 사람」 을 전제로 쓰였기 때문이다.
+        """
         c = conn()
         try:
             uid = auth.user_by_name(c, username)["id"]
@@ -330,7 +346,7 @@ class Base(unittest.TestCase):
             c.close()
         code, data = self.j("PUT", "/api/admin/relay/grants/%d" % uid,
                             {"level": level, "all_servers": all_servers,
-                             "server_ids": list(server_ids)})
+                             "server_ids": list(server_ids), "shell": shell})
         self.assertEqual(code, 200, data)
         return uid
 
@@ -1561,6 +1577,873 @@ class TestPages(Base):
         self.login("admin", "admin-pw-12345")
         html = self.c.get("/").get_data(as_text=True)
         self.assertNotIn("secret_enc", html)
+
+
+# ---------------------------------------------------------------------------
+# 9. 셸 열기 권한 (users.ssh_shell)
+# ---------------------------------------------------------------------------
+class TestShellGrant(Base):
+    def setUp(self):
+        super(TestShellGrant, self).setUp()
+        self.login("admin", "admin-pw-12345")
+        self.srv = self.make_server(name="shell-host", host="10.6.0.1")
+
+    def test_read_level_alone_does_not_open_a_shell(self):
+        """「조회」 등급만 받은 사람이 웹 콘솔로 제약 없는 셸을 열던 구멍."""
+        self.grant("hong", level="read", shell="off")
+        self.login("hong", "hong-pw-12345")
+        self.start_relay()
+        code, data = self.j("POST", "/api/term", {"server_id": self.srv["id"]})
+        self.assertEqual(code, 403, data)
+        self.assertIn("셸을 열 허용이 없습니다", data["error"])
+        res = self.c.get("/servers/%d/terminal" % self.srv["id"])
+        self.assertEqual(res.status_code, 403)
+        # 채팅으로 묻는 길은 그대로다
+        code, data = self.j("GET", "/api/servers")
+        self.assertEqual(code, 200)
+        self.assertEqual(data["shell"], "off")
+
+    def test_console_opens_a_web_console(self):
+        self.grant("hong", level="read", shell="console")
+        self.login("hong", "hong-pw-12345")
+        self.start_relay()
+        code, data = self.j("POST", "/api/term", {"server_id": self.srv["id"]})
+        self.assertEqual(code, 201, data)
+
+    def test_taking_the_shell_away_closes_it_and_stops_keys(self):
+        uid = self.grant("hong", level="write", shell="console")
+        self.login("hong", "hong-pw-12345")
+        self.start_relay()
+        code, data = self.j("POST", "/api/term", {"server_id": self.srv["id"]})
+        self.assertEqual(code, 201, data)
+        term_id = data["term_id"]
+        hong_c, hong_csrf = self.c, self.csrf
+
+        self.login("admin", "admin-pw-12345")
+        code, data = self.j("PUT", "/api/admin/relay/grants/%d" % uid,
+                            {"level": "write", "all_servers": True, "server_ids": [],
+                             "shell": "off"})
+        self.assertEqual(code, 200, data)
+        self.assertEqual(data["shell"], "off")
+        self.assertEqual(data["terminals_closed"], 1)
+
+        self.c, self.csrf = hong_c, hong_csrf
+        code, data = self.j("POST", "/api/term/%s/io" % term_id, {"data": "ls\r"})
+        self.assertEqual(code, 403, "허용을 뗀 뒤에는 키가 나가면 안 된다")
+
+    def test_level_off_turns_the_shell_off_too(self):
+        uid = self.grant("hong", level="read", shell="tunnel")
+        self.grant("hong", level="off", shell="tunnel")
+        c = conn()
+        try:
+            row = c.execute("SELECT ssh_shell FROM users WHERE id = ?", (uid,)).fetchone()
+        finally:
+            c.close()
+        self.assertEqual(row["ssh_shell"], "off")
+
+    def test_bad_shell_value_is_refused(self):
+        c = conn()
+        try:
+            uid = auth.user_by_name(c, "hong")["id"]
+        finally:
+            c.close()
+        code, data = self.j("PUT", "/api/admin/relay/grants/%d" % uid,
+                            {"level": "read", "all_servers": True, "server_ids": [],
+                             "shell": "root"})
+        self.assertEqual(code, 400, data)
+
+    def test_grants_list_shows_shell(self):
+        self.grant("hong", level="read", shell="console")
+        code, data = self.j("GET", "/api/admin/relay/grants")
+        self.assertEqual(code, 200)
+        hong = [u for u in data["users"] if u["username"] == "hong"][0]
+        self.assertEqual(hong["shell"], "console")
+        self.assertEqual([s["key"] for s in data["shells"]], ["off", "console", "tunnel"])
+
+
+# ---------------------------------------------------------------------------
+# 10. 사용자 클라이언트 (claude-term)
+# ---------------------------------------------------------------------------
+class ClientBase(Base):
+    def enroll_client(self):
+        """**지금 로그인한 사람**의 클라이언트를 등록하고 키를 돌려준다."""
+        code, data = self.j("POST", "/api/my-client/enroll", {})
+        self.assertEqual(code, 200, data)
+        res = APP.test_client().post("/api/client/register",
+                                     json={"code": data["code"], "name": "HONG-PC",
+                                           "version": "1.0.0", "os": "nt win32"})
+        self.assertEqual(res.status_code, 201, res.get_data(as_text=True))
+        return res.get_json()["client_key"]
+
+    @staticmethod
+    def cj(key, method, url, body=None):
+        kw = {"headers": {"X-Client-Key": key, "X-Client-Version": "1.0.0"}}
+        if body is not None:
+            kw["json"] = body
+        res = getattr(APP.test_client(), method.lower())(url, **kw)
+        return res.status_code, (res.get_json() or {})
+
+
+class TestClient(ClientBase):
+    def setUp(self):
+        super(TestClient, self).setUp()
+        self.login("admin", "admin-pw-12345")
+        self.srv = self.make_server(name="cli-host", host="10.7.0.1")
+        self.other = self.make_server(name="cli-other", host="10.7.0.2")
+
+    def test_enroll_needs_tunnel_permission(self):
+        self.grant("hong", level="read", shell="console")
+        self.login("hong", "hong-pw-12345")
+        code, data = self.j("POST", "/api/my-client/enroll", {})
+        self.assertEqual(code, 403, data)
+
+    def test_register_and_me(self):
+        self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        key = self.enroll_client()
+        code, data = self.cj(key, "GET", "/api/client/me")
+        self.assertEqual(code, 200, data)
+        self.assertEqual(data["user"]["username"], "hong")
+        self.assertEqual(data["shell"], "tunnel")
+        # 키 원문은 DB 에 없다
+        c = conn()
+        try:
+            hashes = [r["key_hash"] for r in c.execute("SELECT key_hash FROM client_agents")]
+        finally:
+            c.close()
+        self.assertNotIn(key, hashes)
+
+    def test_code_is_single_use_and_bad_code_is_refused(self):
+        self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        code, data = self.j("POST", "/api/my-client/enroll", {})
+        reg = {"code": data["code"], "name": "X", "version": "1.0.0"}
+        c = APP.test_client()
+        self.assertEqual(c.post("/api/client/register", json=reg).status_code, 201)
+        self.assertEqual(c.post("/api/client/register", json=reg).status_code, 403)
+        bad = dict(reg, code="000000" if data["code"] != "000000" else "111111")
+        self.assertEqual(c.post("/api/client/register", json=bad).status_code, 403)
+
+    def test_cookie_alone_does_not_open_the_client_api(self):
+        """
+        /api/client/* 는 CSRF 를 건너뛴다. 그래서 쿠키로는 **절대** 통하면 안 된다.
+        통하면 남의 사이트가 사용자 브라우저로 터널을 열 수 있다.
+        """
+        self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        res = self.c.get("/api/client/me")
+        self.assertEqual(res.status_code, 401)
+        res = self.c.post("/api/client/tunnel", json={"server_id": self.srv["id"]})
+        self.assertEqual(res.status_code, 401)
+        res = self.c.post("/api/client/sessions", json={"name": "x"})
+        self.assertEqual(res.status_code, 401)
+
+    def test_password_change_kills_the_key(self):
+        uid = self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        key = self.enroll_client()
+        self.assertEqual(self.cj(key, "GET", "/api/client/me")[0], 200)
+        c = conn()
+        try:
+            auth.set_password(c, uid, "hong-pw-67890")
+            c.commit()
+        finally:
+            c.close()
+        self.assertEqual(self.cj(key, "GET", "/api/client/me")[0], 401)
+        c = conn()
+        try:
+            auth.set_password(c, uid, "hong-pw-12345")
+            c.commit()
+        finally:
+            c.close()
+
+    def test_revoke_and_reregister_kill_the_old_key(self):
+        self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        first = self.enroll_client()
+        second = self.enroll_client()
+        self.assertEqual(self.cj(first, "GET", "/api/client/me")[0], 401,
+                         "다른 PC 로 다시 등록하면 예전 키는 죽어야 한다")
+        self.assertEqual(self.cj(second, "GET", "/api/client/me")[0], 200)
+        code, _ = self.j("POST", "/api/my-client/revoke", {})
+        self.assertEqual(code, 200)
+        self.assertEqual(self.cj(second, "GET", "/api/client/me")[0], 401)
+
+    def test_disabled_account_kills_the_key(self):
+        uid = self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        key = self.enroll_client()
+        c = conn()
+        try:
+            c.execute("UPDATE users SET is_active = 0 WHERE id = ?", (uid,))
+            c.commit()
+            self.assertEqual(self.cj(key, "GET", "/api/client/me")[0], 401)
+        finally:
+            c.execute("UPDATE users SET is_active = 1 WHERE id = ?", (uid,))
+            c.commit()
+            c.close()
+
+    def test_server_list_follows_the_grants_and_has_no_secret(self):
+        self.grant("hong", level="read", all_servers=False,
+                   server_ids=[self.srv["id"]], shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        key = self.enroll_client()
+        code, data = self.cj(key, "GET", "/api/client/servers")
+        self.assertEqual(code, 200, data)
+        self.assertEqual([s["name"] for s in data["servers"]], ["cli-host"])
+        self.assertTrue(data["can_tunnel"])
+        text = json.dumps(data)
+        self.assertNotIn("secret", text)
+        self.assertNotIn("password", text)
+
+    def test_chat_from_the_client_uses_the_same_path(self):
+        self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        self.start_relay(outputs={"df -h": "Filesystem Size Used\n/dev/sda1 20G 9.6G\n"})
+        key = self.enroll_client()
+        saved = app_module.get_provider
+        fake = FakeProvider([FENCE % "df -h", "루트는 9.6G 를 쓰고 있습니다."])
+        app_module.get_provider = lambda db: fake
+        try:
+            code, data = self.cj(key, "POST", "/api/client/sessions",
+                                 {"name": "클라이언트에서", "server_id": self.srv["id"]})
+            self.assertEqual(code, 201, data)
+            sid = data["session"]["id"]
+            code, data = self.cj(key, "POST", "/api/client/sessions/%d/messages" % sid,
+                                 {"message": "디스크 얼마 남았어?"})
+            self.assertEqual(code, 200, data)
+            self.assertIn("9.6G", data["messages"][-1]["content"])
+            self.assertEqual(self.relay.ran, ["df -h"])
+        finally:
+            app_module.get_provider = saved
+        # 같은 대화를 웹에서 이어서 본다
+        code, data = self.j("GET", "/api/sessions/%d/messages" % sid)
+        self.assertEqual(code, 200)
+        self.assertIn("9.6G", data["messages"][-1]["content"])
+
+
+# ---------------------------------------------------------------------------
+# 11. PuTTY 터널
+# ---------------------------------------------------------------------------
+class EchoServer(threading.Thread):
+    """대상 서버 대신. 받은 바이트를 그대로 돌려준다. 첫 줄로 배너를 보낸다."""
+
+    def __init__(self):
+        super(EchoServer, self).__init__(name="echo", daemon=True)
+        import socket
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+        self.conns = []
+
+    def run(self):
+        while True:
+            try:
+                s, _ = self.sock.accept()
+            except OSError:
+                return
+            self.conns.append(s)
+            threading.Thread(target=self._echo, args=(s,), daemon=True).start()
+
+    @staticmethod
+    def _echo(s):
+        try:
+            s.sendall(b"SSH-2.0-OpenSSH_9.3\r\n")
+            while True:
+                data = s.recv(65536)
+                if not data:
+                    break
+                s.sendall(data)
+        except OSError:
+            pass
+        finally:
+            s.close()
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        import socket
+        for s in self.conns:
+            # 윈도우에서는 다른 스레드가 close 해도 막혀 있는 recv 가 깨어나지
+            # 않는다. shutdown 이 상대에게 FIN 을 보내고 recv 를 깨운다.
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
+def read_frames(response, on_frame):
+    """아래 스트림을 읽는다. 프레임 하나마다 on_frame(kind, value)."""
+    buf = b""
+    for chunk in response.response:
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            kind, _, rest = line.partition(b" ")
+            if kind == b"D":
+                on_frame("D", base64.b64decode(rest))
+            elif kind == b"C":
+                on_frame("C", json.loads(rest.decode("utf-8")))
+                return
+            else:
+                on_frame(kind.decode(), None)
+
+
+class FakeTunnelRelay(FakeRelay):
+    """FakeRelay 에 터널을 더한다. 진짜 중계처럼 소켓을 열고 바이트를 옮긴다."""
+
+    def __init__(self, key, **kw):
+        super(FakeTunnelRelay, self).__init__(key, **kw)
+        self.dispatched = []
+
+    def run(self):
+        self.ready.set()
+        while not self.stop.is_set():
+            res = self._post("/api/relay/poll", {})
+            if res.status_code != 200:
+                time.sleep(0.05)
+                continue
+            for t in res.get_json().get("tunnels") or []:
+                self.dispatched.append(t)
+                threading.Thread(target=self._tunnel, args=(t,), daemon=True).start()
+
+    def _tunnel(self, t):
+        import socket
+        tid = t["tunnel_id"]
+        cl = APP.test_client()
+        hdr = {"X-Relay-Key": self.key}
+        try:
+            s = socket.create_connection((t["host"], t["port"]), timeout=3)
+        except OSError as exc:
+            cl.post("/api/relay/tunnel/%s/opened" % tid, headers=hdr,
+                    json={"ok": False, "error": str(exc)})
+            return
+        s.settimeout(None)
+        cl.post("/api/relay/tunnel/%s/opened" % tid, headers=hdr, json={"ok": True})
+
+        def up():
+            seq = 0
+            c2 = APP.test_client()
+            while True:
+                try:
+                    data = s.recv(65536)
+                except OSError:
+                    return
+                if not data:
+                    c2.post("/api/relay/tunnel/%s/close" % tid, headers=hdr,
+                            json={"reason": "대상 서버가 연결을 끊었습니다"})
+                    return
+                seq += 1
+                c2.post("/api/relay/tunnel/%s/up" % tid, headers=hdr,
+                        json={"seq": seq, "data": base64.b64encode(data).decode()})
+
+        threading.Thread(target=up, daemon=True).start()
+        res = cl.get("/api/relay/tunnel/%s/down" % tid, headers=hdr, buffered=False)
+
+        def on_frame(kind, value):
+            if kind == "D":
+                s.sendall(value)
+
+        read_frames(res, on_frame)
+        try:
+            s.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        s.close()
+
+
+class TunnelClient(object):
+    """클라이언트(claude-term) 쪽. 아래 스트림을 스레드로 읽고, 위로 순번을 붙여 보낸다."""
+
+    def __init__(self, key, tunnel_id):
+        self.key = key
+        self.id = tunnel_id
+        self.got = b""
+        self.frames = []
+        self.closed = None
+        self.opened = threading.Event()
+        self.done = threading.Event()
+        self.seq = 0
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _headers(self):
+        return {"X-Client-Key": self.key, "X-Client-Version": "1.0.0"}
+
+    def _read(self):
+        res = APP.test_client().get("/api/client/tunnel/%s/down" % self.id,
+                                    headers=self._headers(), buffered=False)
+        if res.status_code != 200:
+            self.closed = "HTTP %d" % res.status_code
+            self.done.set()
+            return
+
+        def on_frame(kind, value):
+            self.frames.append(kind)
+            if kind == "O":
+                self.opened.set()
+            elif kind == "D":
+                self.got += value
+            elif kind == "C":
+                self.closed = value
+
+        read_frames(res, on_frame)
+        self.done.set()
+
+    def send(self, data, seq=None):
+        if seq is None:
+            self.seq += 1
+            seq = self.seq
+        res = APP.test_client().post(
+            "/api/client/tunnel/%s/up" % self.id, headers=self._headers(),
+            json={"seq": seq, "data": base64.b64encode(data).decode()})
+        return res.status_code, (res.get_json() or {})
+
+    def wait_for(self, needle, timeout=5):
+        end = time.time() + timeout
+        while time.time() < end:
+            if needle in self.got:
+                return True
+            time.sleep(0.02)
+        return False
+
+
+class TestTunnel(ClientBase):
+    def setUp(self):
+        super(TestTunnel, self).setUp()
+        set_setting("relay_term_max_per_user", "2")
+        self.echo = EchoServer()
+        self.echo.start()
+        self.login("admin", "admin-pw-12345")
+        code, data = self.j("POST", "/api/servers", {
+            "name": "echo-host", "host": "127.0.0.1", "port": self.echo.port,
+            "username": "svc_ops", "auth_kind": "key", "key_name": "ops"})
+        self.assertEqual(code, 201, data)
+        self.srv = data["server"]
+        self.uid = self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+        relay_key = self.start_relay_kind(FakeTunnelRelay)
+        self.relay_key = relay_key
+        self.key = self.enroll_client()
+
+    def tearDown(self):
+        self.echo.close()
+        super(TestTunnel, self).tearDown()
+
+    def start_relay_kind(self, cls):
+        code = self.j("POST", "/api/my-relay/enroll", {})[1]["code"]
+        res = self.c.post("/api/relay/register",
+                          json={"code": code, "name": "VDI", "version": "0.2.0"})
+        key = res.get_json()["agent_key"]
+        relay = cls(key)
+        relay.start()
+        relay.ready.wait(3)
+        self.relays.append(relay)
+        time.sleep(0.2)
+        return key
+
+    def open(self):
+        code, data = self.cj(self.key, "POST", "/api/client/tunnel",
+                             {"server_id": self.srv["id"]})
+        self.assertEqual(code, 201, data)
+        t = TunnelClient(self.key, data["tunnel_id"])
+        self.assertTrue(t.opened.wait(5), "터널이 열리지 않았다: %r" % t.closed)
+        return t
+
+    def test_bytes_go_through_and_come_back(self):
+        t = self.open()
+        self.assertTrue(t.wait_for(b"SSH-2.0-OpenSSH_9.3"), t.got)
+        code, data = t.send(b"\x00\x01hello\xff")
+        self.assertEqual(code, 200, data)
+        self.assertTrue(t.wait_for(b"\x00\x01hello\xff"), "바이트가 그대로 돌아와야 한다")
+        code, _ = self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+        self.assertEqual(code, 200)
+        self.assertTrue(t.done.wait(5))
+        self.assertIn("사용자", t.closed)
+        # 기록에는 바이트 수만 남는다
+        c = conn()
+        try:
+            row = c.execute("SELECT * FROM tunnel_sessions WHERE id = ?", (t.id,)).fetchone()
+        finally:
+            c.close()
+        self.assertEqual(row["state"], "closed")
+        self.assertGreater(row["bytes_up"], 0)
+        self.assertGreater(row["bytes_down"], 0)
+        self.assertEqual(row["target"], "127.0.0.1:%d" % self.echo.port)
+
+    def test_relay_gets_the_address_from_the_db_and_no_credentials(self):
+        t = self.open()
+        relay = self.relays[0]
+        self.assertEqual(len(relay.dispatched), 1)
+        sent = relay.dispatched[0]
+        self.assertEqual(sorted(sent), ["host", "port", "tunnel_id"])
+        self.assertEqual((sent["host"], sent["port"]), ("127.0.0.1", self.echo.port))
+        self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+
+    def test_client_cannot_choose_the_target(self):
+        """요청에 주소를 넣어도 쓰지 않는다. 쓰면 내부망 프록시가 된다."""
+        code, data = self.cj(self.key, "POST", "/api/client/tunnel",
+                             {"server_id": self.srv["id"], "host": "10.0.0.1",
+                              "port": 3306})
+        self.assertEqual(code, 201, data)
+        t = TunnelClient(self.key, data["tunnel_id"])
+        self.assertTrue(t.opened.wait(5))
+        sent = self.relays[0].dispatched[-1]
+        self.assertEqual((sent["host"], sent["port"]), ("127.0.0.1", self.echo.port))
+        self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+
+    def test_duplicate_chunk_is_dropped_and_gap_closes(self):
+        t = self.open()
+        self.assertTrue(t.wait_for(b"SSH-2.0"))
+        self.assertEqual(t.send(b"one", seq=1)[0], 200)
+        code, data = t.send(b"one", seq=1)
+        self.assertEqual(code, 200)
+        self.assertTrue(data["dup"])
+        self.assertTrue(t.wait_for(b"one"))
+        time.sleep(0.2)
+        self.assertEqual(t.got.count(b"one"), 1, "같은 순번을 두 번 넘기면 SSH 가 깨진다")
+        code, _ = t.send(b"three", seq=3)
+        self.assertEqual(code, 409)
+        self.assertTrue(t.done.wait(5))
+        self.assertIn("순서", t.closed)
+
+    def test_other_people_cannot_touch_my_tunnel(self):
+        t = self.open()
+        self.login("admin", "admin-pw-12345")
+        self.grant("kim", level="read", shell="tunnel")
+        self.login("kim", "kim-pw-12345")
+        kim_key = self.enroll_client()
+        for method, url in (("GET", "/api/client/tunnel/%s/down" % t.id),
+                            ("POST", "/api/client/tunnel/%s/up" % t.id),
+                            ("POST", "/api/client/tunnel/%s/close" % t.id)):
+            code, _ = self.cj(kim_key, method, url, {"seq": 1, "data": ""}
+                              if method == "POST" else None)
+            self.assertEqual(code, 403, url)
+        self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+
+    def test_second_down_stream_is_refused(self):
+        t = self.open()
+        code, _ = self.cj(self.key, "GET", "/api/client/tunnel/%s/down" % t.id)
+        self.assertEqual(code, 409)
+        self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+
+    def test_taking_tunnel_permission_away_closes_it_now(self):
+        t = self.open()
+        hong_c, hong_csrf = self.c, self.csrf
+        self.login("admin", "admin-pw-12345")
+        code, data = self.j("PUT", "/api/admin/relay/grants/%d" % self.uid,
+                            {"level": "read", "all_servers": True, "server_ids": [],
+                             "shell": "console"})
+        self.assertEqual(code, 200, data)
+        self.assertEqual(data["tunnels_closed"], 1)
+        self.assertTrue(t.done.wait(5))
+        self.assertIn("허용", t.closed)
+        code, data = self.cj(self.key, "POST", "/api/client/tunnel",
+                             {"server_id": self.srv["id"]})
+        self.assertEqual(code, 403, data)
+        self.c, self.csrf = hong_c, hong_csrf
+
+    def test_housekeep_catches_a_disabled_server(self):
+        t = self.open()
+        c = conn()
+        try:
+            c.execute("UPDATE ssh_servers SET is_enabled = 0 WHERE id = ?", (self.srv["id"],))
+            c.commit()
+            import client_api
+            tunnel_store.housekeep(c, client_api.still_allowed)
+        finally:
+            c.close()
+        self.assertTrue(t.done.wait(5))
+        self.assertIn("꺼서", t.closed)
+
+    def test_target_hangs_up(self):
+        t = self.open()
+        self.assertTrue(t.wait_for(b"SSH-2.0"))
+        self.echo.close()
+        self.assertTrue(t.done.wait(5))
+        self.assertIn("대상 서버", t.closed)
+
+    def test_unreachable_target_fails_with_the_db_address(self):
+        c = conn()
+        try:
+            c.execute("UPDATE ssh_servers SET port = 1 WHERE id = ?", (self.srv["id"],))
+            c.commit()
+        finally:
+            c.close()
+        code, data = self.cj(self.key, "POST", "/api/client/tunnel",
+                             {"server_id": self.srv["id"]})
+        self.assertEqual(code, 201, data)
+        t = TunnelClient(self.key, data["tunnel_id"])
+        self.assertTrue(t.done.wait(8))
+        self.assertIn("127.0.0.1:1", t.closed)
+        self.assertNotIn("O", t.frames)
+
+    def test_limit_counts_web_consoles_and_tunnels_together(self):
+        set_setting("relay_term_max_per_user", "2")
+        t = self.open()
+        code, data = self.j("POST", "/api/term", {"server_id": self.srv["id"]})
+        self.assertEqual(code, 201, data)
+        code, data = self.cj(self.key, "POST", "/api/client/tunnel",
+                             {"server_id": self.srv["id"]})
+        self.assertEqual(code, 409, data)
+        self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+
+    def test_no_relay_means_503(self):
+        for r in self.relays:
+            r.stop.set()
+        self.login("hong", "hong-pw-12345")
+        self.j("POST", "/api/my-relay/revoke", {})
+        code, data = self.cj(self.key, "POST", "/api/client/tunnel",
+                             {"server_id": self.srv["id"]})
+        self.assertEqual(code, 503, data)
+
+    def test_admin_log_shows_the_tunnel_without_content(self):
+        t = self.open()
+        self.assertTrue(t.wait_for(b"SSH-2.0"))
+        t.send(b"secret-typed-text")
+        self.assertTrue(t.wait_for(b"secret-typed-text"))
+        self.cj(self.key, "POST", "/api/client/tunnel/%s/close" % t.id, {})
+        self.assertTrue(t.done.wait(5))
+        self.login("admin", "admin-pw-12345")
+        code, data = self.j("GET", "/api/admin/relay/log?kind=tunnel&days=1")
+        self.assertEqual(code, 200, data)
+        rows = [r for r in data["rows"] if r["ref"] == t.id]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["where"], "PuTTY 터널")
+        self.assertNotIn("secret-typed-text", json.dumps(data, ensure_ascii=False))
+        # DB 파일 어디에도 친 내용이 없다
+        c = conn()
+        try:
+            dump = chr(10).join(c.iterdump())
+        finally:
+            c.close()
+        self.assertNotIn("secret-typed-text", dump)
+
+    def test_old_client_is_refused(self):
+        res = APP.test_client().post(
+            "/api/client/tunnel", json={"server_id": self.srv["id"]},
+            headers={"X-Client-Key": self.key, "X-Client-Version": "0.9.0"})
+        self.assertEqual(res.status_code, 426)
+
+
+# ---------------------------------------------------------------------------
+# 12. 터널을 진짜 HTTP 로 (relay.exe 와 claude-term 의 코드 그대로)
+# ---------------------------------------------------------------------------
+def _load(name, path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestTunnelOverHttp(ClientBase):
+    """
+    시험 클라이언트(APP.test_client)가 아니라 진짜 소켓 위의 HTTP 로 돈다.
+    청크로 흘러가는 아래 스트림을 http.client 가 한 줄씩 읽어 내는지, 위로 가는
+    POST 가 연결을 재사용하는지 — 테스트 클라이언트로는 보이지 않는 부분이다.
+    """
+
+    def setUp(self):
+        super(TestTunnelOverHttp, self).setUp()
+        from werkzeug.serving import make_server
+        self.http = make_server("127.0.0.1", 0, APP, threaded=True)
+        self.base = "http://127.0.0.1:%d" % self.http.server_port
+        threading.Thread(target=self.http.serve_forever, daemon=True).start()
+        self.echo = EchoServer()
+        self.echo.start()
+        self.ra = _load("relay_agent_mod", os.path.join(ROOT, "relay_agent", "relay.py"))
+        self.ct = _load("claude_term_mod", os.path.join(ROOT, "client_app", "claude_term.py"))
+
+        self.login("admin", "admin-pw-12345")
+        code, data = self.j("POST", "/api/servers", {
+            "name": "e2e-host", "host": "127.0.0.1", "port": self.echo.port,
+            "username": "svc_ops", "auth_kind": "key", "key_name": "ops"})
+        self.assertEqual(code, 201, data)
+        self.srv = data["server"]
+        self.grant("hong", level="read", shell="tunnel")
+        self.login("hong", "hong-pw-12345")
+
+        # 진짜 중계
+        code = self.j("POST", "/api/my-relay/enroll", {})[1]["code"]
+        res = self.ra.Server(self.base).post("/api/relay/register",
+                                             {"code": code, "name": "VDI-E2E",
+                                              "version": self.ra.VERSION})
+        self.assertTrue(res.get("ok"), res)
+        self.agent = self.ra.Agent({"url": self.base, "agent_key": res["agent_key"]})
+        threading.Thread(target=self.agent.run, daemon=True).start()
+        time.sleep(0.5)
+
+        # 진짜 클라이언트
+        code = self.j("POST", "/api/my-client/enroll", {})[1]["code"]
+        api = self.ct.Api(self.base)
+        res = api.call("POST", "/api/client/register",
+                       {"code": code, "name": "PC-E2E", "version": self.ct.VERSION})
+        self.api = self.ct.Api(self.base, res["client_key"])
+
+    def tearDown(self):
+        self.agent.stop.set()
+        self.echo.close()
+        self.http.shutdown()
+        super(TestTunnelOverHttp, self).tearDown()
+
+    def test_bytes_round_trip_over_real_http(self):
+        info = self.api.call("POST", "/api/client/tunnel", {"server_id": self.srv["id"]})
+        tid = info["tunnel_id"]
+        hdr = self.api.headers()
+        down = self.ct.Link(self.base, hdr)
+        up = self.ct.Link(self.base, hdr)
+        status, frames = down.stream("/api/client/tunnel/%s/down" % tid, timeout=20)
+        self.assertEqual(status, 200, frames)
+
+        got = {"data": b"", "kinds": [], "closed": None}
+        opened = threading.Event()
+        done = threading.Event()
+
+        def reader():
+            for kind, value in frames:
+                got["kinds"].append(kind)
+                if kind == "O":
+                    opened.set()
+                elif kind == "D":
+                    got["data"] += value
+                elif kind == "C":
+                    got["closed"] = value
+            done.set()
+
+        threading.Thread(target=reader, daemon=True).start()
+        self.assertTrue(opened.wait(8), "중계가 대상에 붙어 O 가 와야 한다: %r" % got)
+
+        def wait_for(needle, timeout=8):
+            end = time.time() + timeout
+            while time.time() < end:
+                if needle in got["data"]:
+                    return True
+                time.sleep(0.02)
+            return False
+
+        self.assertTrue(wait_for(b"SSH-2.0-OpenSSH_9.3"), got)
+        stop = threading.Event()
+        seq = [0]
+        started = time.time()
+        payload = bytes(range(256)) * 64          # 16KB, 모든 바이트 값
+        self.assertTrue(self.ct.send_chunks(up, "/api/client/tunnel/%s/up" % tid,
+                                            seq, payload, stop))
+        self.assertTrue(wait_for(payload), "16KB 가 그대로 돌아와야 한다")
+        # 키 하나의 왕복
+        t0 = time.time()
+        self.assertTrue(self.ct.send_chunks(up, "/api/client/tunnel/%s/up" % tid,
+                                            seq, b"\x03", stop))
+        self.assertTrue(wait_for(payload + b"\x03"))
+        rtt = time.time() - t0
+        self.assertLess(rtt, 1.0, "키 하나 왕복이 %.3f초" % rtt)
+        sys.stderr.write("\n  [e2e] 키 하나 왕복 %.0fms (로컬, 개발 서버) · 전체 %.2f초\n"
+                         % (rtt * 1000, time.time() - started))
+
+        up.post("/api/client/tunnel/%s/close" % tid, {"reason": "시험 끝"})
+        self.assertTrue(done.wait(8))
+        self.assertEqual(got["closed"], "시험 끝")
+        up.close()
+
+    def test_client_session_with_a_stand_in_putty(self):
+        """
+        claude-term 의 TunnelSession 을 그대로 돌린다. putty.exe 대신 이 프로세스의
+        스레드가 127.0.0.1 포트에 붙는다. 그래서 PID 확인(netstat)도 진짜로 돈다 —
+        붙은 쪽의 PID 가 "띄운 프로세스" 의 PID(=이 프로세스)와 같아야 통과한다.
+        """
+        import socket
+        import types
+        ct = self.ct
+        got = {"data": b""}
+        argv_seen = []
+
+        class StandInPutty(object):
+            def __new__(cls, argv, **kw):
+                # putty.exe 만 바꿔 끼운다. netstat 같은 다른 실행은 그대로 둔다.
+                if argv[0] != fake_exe:
+                    return saved_popen(argv, **kw)
+                return object.__new__(cls)
+
+            def __init__(self, argv, **_kw):
+                argv_seen.append(argv)
+                self.pid = os.getpid()
+                port = int(argv[argv.index("-P") + 1])
+
+                def run():
+                    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+                    self.sock = s
+                    try:
+                        while True:
+                            data = s.recv(65536)
+                            if not data:
+                                return
+                            got["data"] += data
+                    except OSError:
+                        return
+                threading.Thread(target=run, daemon=True).start()
+
+        saved_popen = ct.subprocess.Popen
+        ct.subprocess.Popen = StandInPutty
+        fake_exe = os.path.join(_TMP, "putty.exe")
+        open(fake_exe, "wb").close()
+        app = types.SimpleNamespace(
+            cfg={"url": self.base, "putty_path": fake_exe, "use_loghost": True},
+            api=self.api, events=queue.Queue())
+        try:
+            info = self.api.call("POST", "/api/client/tunnel", {"server_id": self.srv["id"]})
+            server = {"id": self.srv["id"], "name": "e2e-host", "username": "svc_ops"}
+            sess = ct.TunnelSession(app, server, info)
+            sess.start()
+            end = time.time() + 10
+            while time.time() < end and b"SSH-2.0-OpenSSH_9.3" not in got["data"]:
+                time.sleep(0.05)
+            self.assertIn(b"SSH-2.0-OpenSSH_9.3", got["data"],
+                          "PuTTY 가 붙기 전에 온 sshd 배너도 전달되어야 한다")
+            self.assertEqual(sess.state, "열림")
+            argv = argv_seen[0]
+            self.assertEqual(argv[-1], "127.0.0.1")
+            self.assertIn("-loghost", argv)
+            self.assertEqual(argv[argv.index("-l") + 1], "svc_ops")
+            self.assertNotIn("-pw", argv, "비밀번호를 PuTTY 명령줄에 넣지 않는다")
+            # PuTTY 를 닫으면 터널도 닫힌다
+            stand_in = [t for t in threading.enumerate()]
+            self.assertTrue(stand_in)
+            sess.close("시험 끝")
+            self.assertTrue(sess.stop.is_set())
+            kinds = []
+            while not app.events.empty():
+                kinds.append(app.events.get()[0])
+            self.assertIn("closed", kinds)
+        finally:
+            ct.subprocess.Popen = saved_popen
+
+    def test_relay_stops_then_tunnel_closes_with_a_reason(self):
+        info = self.api.call("POST", "/api/client/tunnel", {"server_id": self.srv["id"]})
+        tid = info["tunnel_id"]
+        down = self.ct.Link(self.base, self.api.headers())
+        status, frames = down.stream("/api/client/tunnel/%s/down" % tid, timeout=20)
+        self.assertEqual(status, 200)
+        closed = {}
+        done = threading.Event()
+
+        def reader():
+            for kind, value in frames:
+                if kind == "O":
+                    # 열리자마자 중계를 멈춘다. 바이트가 중계를 지나므로 터널도 끊겨야 한다.
+                    self.agent.stop.set()
+                if kind == "C":
+                    closed["why"] = value
+            done.set()
+
+        threading.Thread(target=reader, daemon=True).start()
+        self.assertTrue(done.wait(15), "중계가 멈추면 터널이 닫혀야 한다")
+        self.assertIn("중계", closed.get("why") or "", closed)
 
 
 if __name__ == "__main__":

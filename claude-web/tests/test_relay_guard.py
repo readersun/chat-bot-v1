@@ -89,6 +89,10 @@ USER_ROUTES = [
     ("POST", "/api/my-relay/enroll"),
     ("POST", "/api/my-relay/revoke"),
     ("GET", "/servers/program"),
+    ("GET", "/api/my-client"),
+    ("POST", "/api/my-client/enroll"),
+    ("POST", "/api/my-client/revoke"),
+    ("GET", "/servers/client-program"),
 ]
 
 ADMIN_ROUTES = [
@@ -111,6 +115,28 @@ RELAY_ROUTES = [
     ("POST", "/api/relay/poll"),
     ("POST", "/api/relay/result"),
     ("POST", "/api/relay/beat"),
+    ("POST", "/api/relay/tunnel/abc/opened"),
+    ("GET", "/api/relay/tunnel/abc/down"),
+    ("POST", "/api/relay/tunnel/abc/up"),
+    ("POST", "/api/relay/tunnel/abc/close"),
+]
+
+# 클라이언트(claude-term)의 길. 등록(/register)만 빼고 전부 X-Client-Key 가 있어야
+# 한다. 이 접두어는 CSRF 를 건너뛰므로 **쿠키로는 절대 통하면 안 된다.**
+CLIENT_ROUTES = [
+    ("GET", "/api/client/me"),
+    ("GET", "/api/client/servers"),
+    ("POST", "/api/client/tunnel"),
+    ("GET", "/api/client/tunnel/abc/down"),
+    ("POST", "/api/client/tunnel/abc/up"),
+    ("POST", "/api/client/tunnel/abc/close"),
+    ("GET", "/api/client/tunnels"),
+    ("POST", "/api/client/sessions"),
+    ("GET", "/api/client/sessions/1/messages"),
+    ("POST", "/api/client/sessions/1/messages"),
+    ("GET", "/api/client/servers/1/sessions"),
+    ("POST", "/api/client/ssh/commands/1/approve"),
+    ("POST", "/api/client/ssh/commands/1/reject"),
 ]
 
 
@@ -198,6 +224,22 @@ class TestGuards(unittest.TestCase):
             with self.subTest(url=url):
                 res = self.hit(c, method, url)
                 self.assertEqual(res.status_code, 401, url)
+
+    def test_client_routes_need_the_key(self):
+        c = APP.test_client()
+        for method, url in CLIENT_ROUTES:
+            with self.subTest(url=url):
+                res = self.hit(c, method, url)
+                self.assertEqual(res.status_code, 401, url)
+
+    def test_client_routes_ignore_the_login_cookie(self):
+        """로그인한 관리자의 브라우저라도 쿠키로는 클라이언트 길이 열리지 않는다."""
+        c, csrf = self.login("admin", "admin-pw-12345")
+        for method, url in CLIENT_ROUTES:
+            with self.subTest(url=url):
+                res = self.hit(c, method, url, csrf)
+                self.assertEqual(res.status_code, 401,
+                                 "%s %s 가 쿠키로 %d" % (method, url, res.status_code))
 
     def test_csrf_is_required_for_state_changes(self):
         """토큰 없이 POST 하면 400 이다. (중계 API 만 예외)"""
@@ -324,7 +366,8 @@ class TestMigration(unittest.TestCase):
                 " AND tbl_name = 'relay_agents'")}
             self.assertIn("idx_relay_agents_owner", idx, idx)
 
-            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], 9)
+            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0],
+                             db_module.SCHEMA_VERSION)
             self.assertEqual(c.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(c.execute("PRAGMA foreign_key_check").fetchall(), [])
         finally:
@@ -432,7 +475,8 @@ class TestMigration(unittest.TestCase):
         db_module.migrate(verbose=False)
         c = db_module.connect(self.path)
         try:
-            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], 9)
+            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0],
+                             db_module.SCHEMA_VERSION)
             for t in ("ssh_servers", "ssh_grants", "ssh_commands", "relay_agents",
                       "relay_enroll_codes", "relay_jobs", "term_sessions",
                       "term_inputs"):

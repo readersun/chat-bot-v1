@@ -41,7 +41,7 @@ import time
 import uuid
 
 from flask import (
-    Blueprint, abort, jsonify, render_template, request, send_file,
+    Blueprint, Response, abort, jsonify, render_template, request, send_file,
 )
 
 import auth
@@ -50,6 +50,7 @@ import permissions
 import relay_store as store
 import settings_store
 import ssh_policy
+import tunnel_store as tstore
 from db import audit, get_db, ts
 
 bp = Blueprint("servers", __name__)
@@ -161,6 +162,7 @@ def terminal_page(server_id):
     """
     db, user = get_db(), _me()
     row = _server_or_403(db, server_id)
+    permissions.require_shell(db, user, permissions.SHELL_CONSOLE)
     return render_template(
         "terminal.html",
         csrf=auth.csrf_token(),
@@ -211,6 +213,7 @@ def list_servers():
         ok=True,
         servers=out,
         level=permissions.ssh_level(db, user),
+        shell=permissions.shell_level(db, user),
         policy=permissions.ssh_policy(db),
         can_manage=is_admin,
         relay=_my_relay_payload(db, user, agent),
@@ -407,6 +410,8 @@ def delete_server(server_id):
         store.set_term_state(db, t["id"], "closed", "서버 삭제")
         store.enqueue(db, store.KIND_TERM_CLOSE, t["user_id"], term_id=t["id"])
 
+    tunnels = tstore.close_server_tunnels(db, server_id, "서버가 목록에서 빠져 닫았습니다")
+
     # 붙어 있던 대화를 먼저 떼어 낸다.
     #
     # sessions.server_id 는 ALTER TABLE 로 더한 컬럼이라 ON DELETE 규칙이 없다.
@@ -418,8 +423,8 @@ def delete_server(server_id):
 
     db.execute("DELETE FROM ssh_servers WHERE id = ?", (server_id,))
     audit(db, user["id"], "ssh_server_removed", "ssh_server", server_id,
-          "name=%s terms_closed=%d sessions_detached=%d"
-          % (row["name"], len(terms), detached))
+          "name=%s terms_closed=%d tunnels_closed=%d sessions_detached=%d"
+          % (row["name"], len(terms), tunnels, detached))
     db.commit()
     store.wake()
     return jsonify(ok=True, deleted=server_id, terminals_closed=len(terms),
@@ -466,6 +471,7 @@ def my_relay_revoke():
         abort(404, "붙어 있는 내 중계가 없습니다.")
     store.revoke_agent(db, agent["id"])
     closed = store.close_user_terms(db, user["id"], "중계 등록을 해제했습니다")
+    tstore.close_user_tunnels(db, user["id"], "VDI 중계 등록을 해제해 터널을 닫았습니다")
     audit(db, user["id"], "relay_revoked", "relay", agent["id"], "self")
     db.commit()
     store.wake()
@@ -647,14 +653,16 @@ def open_term():
     except (TypeError, ValueError):
         abort(400, "서버를 고르세요.")
     row = _server_or_403(db, server_id)
+    permissions.require_shell(db, user, permissions.SHELL_CONSOLE)
     if not row["is_enabled"]:
         abort(409, "꺼 둔 서버입니다. 관리자에게 문의하세요.")
     _require_my_relay(db, user)
 
     limit = store.term_max_per_user(db)
-    if store.open_term_count(db, user["id"]) >= limit:
-        abort(409, "한 사람이 동시에 열 수 있는 터미널은 %d개까지입니다. "
-                   "쓰지 않는 터미널을 먼저 닫아 주세요." % limit)
+    used = store.open_term_count(db, user["id"]) + tstore.open_tunnel_count(db, user["id"])
+    if used >= limit:
+        abort(409, "한 사람이 동시에 열 수 있는 셸(웹 콘솔과 PuTTY 터널을 합쳐)은 "
+                   "%d개까지입니다. 쓰지 않는 것을 먼저 닫아 주세요." % limit)
 
     cols = max(40, min(200, int(data.get("cols") or 120)))
     rows_n = max(10, min(60, int(data.get("rows") or 30)))
@@ -708,6 +716,9 @@ def term_read(term_id):
 def term_write(term_id):
     db = get_db()
     row = _term_or_403(db, term_id)
+    # 셸 허용은 여는 순간만이 아니라 **칠 때마다** 본다. 허용을 뗀 뒤 청소가
+    # 돌기 전의 몇 초 사이에도 키가 나가면 안 된다.
+    permissions.require_shell(db, _me(), permissions.SHELL_CONSOLE)
     if row["state"] not in ("opening", "open"):
         abort(409, "이미 닫힌 터미널입니다.")
     data = request.get_json(silent=True) or {}
@@ -962,14 +973,18 @@ def _append_result_message(db, cmd_row, ran):
 #     변경 : 승인 카드를 만들고 멈춘다 (사람이 누르기 전에는 나가지 않는다)
 #     차단 : 아무것도 하지 않고 왜 막혔는지 적는다
 # ---------------------------------------------------------------------------
-_SSH_BLOCK = re.compile(r"```(?:ssh|bash|shell|sh)\s*\n(.*?)```", re.DOTALL)
+# 여러 줄 블록(```ssh 다음 줄에 명령)과 한 줄 블록(```ssh df -h```) 둘 다 잡는다.
+# ```console 이나 언어 없는 블록은 잡지 않는다. 그런 블록에는 설명용 예시나
+# 출력이 들어 있어서, 잡으면 명령이 아닌 것이 서버로 나간다.
+_SSH_BLOCK = re.compile(
+    r"```(?:ssh|bash|shell|sh)(?:[ \t]*\n(.*?)|[ \t]+([^\n`]+?))```", re.DOTALL)
 
 
 def extract_commands(text):
     """답에서 ```ssh 블록을 꺼낸다. 반환: [명령문]"""
     out = []
     for m in _SSH_BLOCK.finditer(text or ""):
-        body = (m.group(1) or "").strip()
+        body = (m.group(1) or m.group(2) or "").strip()
         if body:
             out.append(body)
     return out
@@ -1000,8 +1015,11 @@ def chat_prompt_prefix(db, server_row, level, max_cmds):
         "서버를 직접 봐야 답할 수 있으면 다음 형식으로 명령을 적어라.\n"
         "```ssh\n명령 한 줄\n```\n"
         "- 블록 하나에 명령 하나. 설명은 블록 밖에 쓴다.\n"
-        "- 조회 명령은 승인 없이 실행되고 결과가 다시 전달된다. 결과를 받은 "
-        "뒤에 사람 말로 답해라. 숫자는 결과에 있는 값을 그대로 쓴다.\n"
+        "- 조회 명령은 이 응답 안에서 바로 실행되고, 그 결과와 함께 너에게 다시 "
+        "묻는다. 그때 사람 말로 답해라. 숫자는 결과에 있는 값을 그대로 쓴다.\n"
+        "- 블록 없이 \"확인하겠습니다\", \"결과가 오면 정리하겠습니다\" 로 끝내지 "
+        "마라. 블록이 없으면 아무것도 실행되지 않고, 사용자는 오지 않을 답을 "
+        "기다리게 된다.\n"
         "- 한 번에 최대 %d개까지. 추측으로 답하지 말고 모르면 명령을 적어라.\n"
         "- 비밀번호나 키가 들어 있는 파일은 읽지 않는다.\n\n"
         % (server_row["name"], server_row["username"], server_row["host"], what, max_cmds))
@@ -1141,6 +1159,8 @@ def handle_chat_reply(db, user, sess, reply, ask_again, deadline=None,
             break
         text = text2
 
+    # 서버가 붙은 대화인데 답에 명령이 하나도 없었다. 화면이 그 사실을 적는다.
+    note["none"] = used == 0
     final = strip_blocks(text)
     if not final:
         final = _no_text_fallback(note)
@@ -1263,6 +1283,12 @@ def relay_poll():
 
     wait_until = time.time() + store.poll_seconds(db)
     while True:
+        # 기다리는 사이에 이 중계가 해제됐을 수 있다(다시 등록, 관리자가 끊음).
+        # 키는 대기를 **시작할 때** 한 번 봤을 뿐이다. 해제된 중계의 롱폴이 새
+        # 일이나 터널을 가져가면, 그 일은 아무도 처리하지 않는 곳으로 사라진다.
+        if store.agent_revoked(db, agent["id"]):
+            db.commit()
+            abort(401, "등록이 해제된 중계입니다. 다시 등록하세요.")
         jobs = []
         for row in store.take_jobs(db, agent["id"], agent["owner_id"]):
             item = store.job_to_agent(db, row)
@@ -1273,11 +1299,16 @@ def relay_poll():
             jobs.append(item)
         inputs = [{"term_id": tid, "data": data}
                   for tid, data in store.HUB.pending_input()]
-        if jobs or inputs or time.time() >= wait_until:
+        # 열어야 할 터널. 대상 주소는 DB 에 적힌 값이고 자격증명은 싣지 않는다.
+        # SSH 는 사용자 PC 의 PuTTY 가 한다. 중계는 소켓만 연다.
+        tunnels = tstore.HUB.take_dispatch(agent["owner_id"]) if agent["owner_id"] else []
+        if jobs or inputs or tunnels or time.time() >= wait_until:
             store.touch_agent(db, agent["id"])
             db.commit()
-            return jsonify(ok=True, jobs=jobs, input=inputs,
+            return jsonify(ok=True, jobs=jobs, input=inputs, tunnels=tunnels,
                            open_terms=store.HUB.open_ids(),
+                           open_tunnels=[p.id for p in tstore.HUB.live()
+                                         if p.agent_owner == agent["owner_id"]],
                            poll_seconds=store.poll_seconds(db))
         # 기다리기 전에 이 연결의 트랜잭션을 반드시 닫는다. 열린 쓰기 락을
         # 들고 25초를 기다리면 그 사이 다른 요청의 쓰기가 전부 막힌다.
@@ -1376,6 +1407,162 @@ def relay_beat():
 
 
 # ---------------------------------------------------------------------------
+# 터널 (중계 쪽)
+#
+# 중계는 소켓 하나를 열어 바이트를 옮길 뿐이다. 자격증명도 호스트 키도 모른다.
+# 그 사람의 중계만 그 사람의 터널에 붙는다.
+# ---------------------------------------------------------------------------
+def _agent_pipe(db, agent, tunnel_id):
+    pipe = tstore.HUB.get(tunnel_id)
+    if pipe is None:
+        abort(410, "닫힌 터널입니다.")
+    if not agent["owner_id"] or pipe.agent_owner != agent["owner_id"]:
+        abort(403, "이 중계의 터널이 아닙니다.")
+    if pipe.agent_id is not None and pipe.agent_id != agent["id"]:
+        abort(403, "다른 중계가 이미 맡은 터널입니다.")
+    return pipe
+
+
+@relay_api.post("/tunnel/<tunnel_id>/opened")
+def relay_tunnel_opened(tunnel_id):
+    """중계가 대상에 소켓을 열었는지(또는 왜 못 열었는지) 알린다."""
+    db = get_db()
+    agent = _agent_or_401(db)
+    pipe = _agent_pipe(db, agent, tunnel_id)
+    data = request.get_json(silent=True) or {}
+    if data.get("ok"):
+        pipe.mark_open(agent["id"])
+        tstore.set_open(db, tunnel_id, agent["id"])
+    else:
+        # 여기 적히는 주소는 DB 에 있던 값이다. 요청에서 받은 주소를 쓰지
+        # 않으므로 이 메시지로 내부망을 더듬을 수 없다.
+        why = str(data.get("error") or "대상에 닿지 못했습니다")[:160]
+        pipe.agent_id = agent["id"]
+        tstore.close_tunnel(db, pipe, "VDI 중계가 %s:%s 에 닿지 못했습니다 (%s)"
+                            % (pipe.target["host"], pipe.target["port"], why),
+                            failed=True)
+    db.commit()
+    return jsonify(ok=True)
+
+
+@relay_api.get("/tunnel/<tunnel_id>/down")
+def relay_tunnel_down(tunnel_id):
+    db = get_db()
+    agent = _agent_or_401(db)
+    pipe = _agent_pipe(db, agent, tunnel_id)
+    if not pipe.attach("relay"):
+        abort(409, "이 터널은 이미 다른 연결이 받고 있습니다.")
+    db.commit()
+    return Response(pipe.frames("relay"), mimetype="application/octet-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"},
+                    direct_passthrough=True)
+
+
+@relay_api.post("/tunnel/<tunnel_id>/up")
+def relay_tunnel_up(tunnel_id):
+    import client_api
+    db = get_db()
+    agent = _agent_or_401(db)
+    pipe = _agent_pipe(db, agent, tunnel_id)
+    seq, chunk = client_api.read_chunk()
+    db.commit()
+    return client_api.put_result(db, pipe, pipe.put("relay", seq, chunk))
+
+
+@relay_api.post("/tunnel/<tunnel_id>/close")
+def relay_tunnel_close(tunnel_id):
+    db = get_db()
+    agent = _agent_or_401(db)
+    pipe = _agent_pipe(db, agent, tunnel_id)
+    data = request.get_json(silent=True) or {}
+    tstore.close_tunnel(db, pipe, str(data.get("reason")
+                                      or "대상 서버가 연결을 끊었습니다")[:160])
+    db.commit()
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------------------
+# 내 클라이언트 (브라우저가 부른다. 쿠키 + CSRF)
+#
+# 「내 중계」 와 같은 모양이다. 코드도 프로그램도 쓰는 사람이 직접 받는다.
+# /api/client/* 가 아니라 여기 두는 이유: 저 접두어는 CSRF 를 건너뛴다.
+# 브라우저가 부르는 길을 저기에 두면 남의 사이트가 대신 부를 수 있다.
+# ---------------------------------------------------------------------------
+def _my_client_payload(db, user):
+    row = tstore.my_client(db, user["id"])
+    prog = store.program_info("client")
+    code = tstore.active_client_code(db, user["id"])
+    return {
+        "registered": row is not None,
+        "connected": tstore.client_is_live(row),
+        "name": row["name"] if row else "",
+        "version": row["version"] if row else "",
+        "last_seen_at": row["last_seen_at"] if row else None,
+        "program": {"available": bool(prog), "name": prog.get("name") if prog else "",
+                    "size": prog.get("size") if prog else 0,
+                    "sha256": prog.get("sha256") if prog else ""},
+        "enroll": ({"expires_at": code["expires_at"]} if code else None),
+        "can_tunnel": permissions.can_open_shell(db, user, permissions.SHELL_TUNNEL),
+        "server_url": request.url_root.rstrip("/"),
+    }
+
+
+@api.get("/my-client")
+@auth.menu_required("servers")
+def my_client():
+    db, user = get_db(), _me()
+    return jsonify(ok=True, client=_my_client_payload(db, user))
+
+
+@api.post("/my-client/enroll")
+@auth.menu_required("servers")
+def my_client_enroll():
+    """
+    클라이언트 등록 코드. 원문은 **이 응답에만** 있다.
+
+    터널 허용이 없는 사람에게는 주지 않는다. 클라이언트로 하는 일의 중심이
+    터널이고, 허용이 생긴 뒤에 받으면 된다.
+    """
+    db, user = get_db(), _me()
+    permissions.require_shell(db, user, permissions.SHELL_TUNNEL)
+    code = tstore.new_client_code(db, user["id"])
+    audit(db, user["id"], "client_enroll_code_issued", "client", "", "self ttl=600s")
+    db.commit()
+    return jsonify(ok=True, code=code, expires_in=config.RELAY_ENROLL_TTL_SECONDS,
+                   server_url=request.url_root.rstrip("/"))
+
+
+@api.post("/my-client/revoke")
+@auth.menu_required("servers")
+def my_client_revoke():
+    db, user = get_db(), _me()
+    row = tstore.my_client(db, user["id"])
+    if row is None:
+        abort(404, "등록된 내 클라이언트가 없습니다.")
+    tstore.revoke_client(db, row["id"])
+    n = tstore.close_user_tunnels(db, user["id"], "클라이언트 등록을 해제해 터널을 닫았습니다")
+    audit(db, user["id"], "client_revoked", "client", row["id"], "self tunnels=%d" % n)
+    db.commit()
+    return jsonify(ok=True, tunnels_closed=n)
+
+
+@bp.get("/servers/client-program")
+@auth.menu_required("servers")
+def download_client_program():
+    """클라이언트 프로그램. 관리자가 올려 둔 파일 하나를 그대로 내려 준다."""
+    db, user = get_db(), _me()
+    meta = store.program_info("client")
+    if meta is None:
+        abort(404, "아직 클라이언트 프로그램이 올라와 있지 않습니다. 관리자에게 "
+                   "요청하세요.")
+    audit(db, user["id"], "client_program_downloaded", "client", "",
+          "name=%s sha256=%s" % (meta["name"], meta["sha256"][:12]))
+    db.commit()
+    return send_file(meta["path"], as_attachment=True, download_name=meta["name"],
+                     mimetype="application/octet-stream")
+
+
+# ---------------------------------------------------------------------------
 # 청소 스레드
 # ---------------------------------------------------------------------------
 def _housekeep_loop(app):
@@ -1386,6 +1573,8 @@ def _housekeep_loop(app):
             conn = connect()
             try:
                 store.housekeep(conn)
+                import client_api
+                tstore.housekeep(conn, client_api.still_allowed)
             finally:
                 conn.close()
         except Exception:                      # pragma: no cover
@@ -1406,6 +1595,9 @@ def start_housekeeping(app):
             n = store.close_orphan_terms(conn)
             if n:
                 app.logger.warning("지난 프로세스가 남긴 터미널 %d개를 닫았습니다", n)
+            n = tstore.close_orphan_tunnels(conn)
+            if n:
+                app.logger.warning("지난 프로세스가 남긴 터널 %d개를 닫았습니다", n)
         finally:
             conn.close()
     except Exception:                          # pragma: no cover

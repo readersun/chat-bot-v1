@@ -40,6 +40,14 @@ relay_agents.owner_id 와 relay_jobs.owner_id 를 더한다. 사람마다 자기
 중계를 깔기 때문에, 일이 **그 사람의 중계로만** 나가야 한다. 컬럼 두 개를
 더하는 것뿐이고 기존 데이터는 건드리지 않는다.
 
+v9 -> v10 (셸 권한과 PuTTY 터널)
+--------------------------------
+users.ssh_shell 을 더하고, client_agents / client_enroll_codes /
+tunnel_sessions 를 **추가만** 한다. 셸은 등급과 따로 준다. 지금까지는 등급이
+켜져 있으면 「조회」 라도 웹 콘솔로 제약 없는 셸을 열 수 있었다. 옮길 때
+「변경」 등급인 사람만 「웹 콘솔」 을 받고 나머지는 「끔」 이 된다. 이미 변경까지
+할 수 있던 사람의 일은 그대로 두고, 조회만 받은 사람에게 열려 있던 셸만 닫는다.
+
 v7 -> v8 (SSH 중계 추가)
 ------------------------
 ssh_* / relay_* / term_* 표를 **추가만** 하고, 기존 표에는 컬럼 세 개를 더한다.
@@ -63,7 +71,7 @@ from flask import g
 import patch_rules
 from config import BACKUP_DIR, DATABASE_PATH, UPLOAD_DIR
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -529,6 +537,64 @@ CREATE TABLE IF NOT EXISTS term_inputs (
     FOREIGN KEY (term_id) REFERENCES term_sessions(id) ON DELETE CASCADE
 );
 
+-- ---------------------------------------------------------------------------
+-- 사용자 클라이언트와 PuTTY 터널 (v10)
+--
+-- 클라이언트는 사용자의 바깥 PC 에서 돈다. VDI 의 중계와는 다른 프로그램이다.
+-- 클라이언트가 연 127.0.0.1 포트에 PuTTY 가 붙고, 바이트는 챗봇 서버와 그
+-- 사람의 중계를 거쳐 대상 서버의 22번으로 간다. SSH 는 PuTTY 와 sshd 사이에서
+-- 끝나므로 챗봇 서버와 중계는 **암호문만** 본다. 그래서 tunnel_sessions 에는
+-- 내용을 담을 칸이 없다. 누가 · 언제 · 어느 서버 · 얼마나 · 몇 바이트만 남는다.
+--
+-- 키 원문은 저장하지 않는다(key_hash). pw_stamp 는 등록할 때의 비밀번호
+-- 지문이다. 비밀번호가 바뀌면 지문이 달라지고 그 키는 더 이상 통하지 않는다.
+-- 쿠키 로그인과 같은 규칙이다.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS client_agents (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    key_hash      TEXT NOT NULL UNIQUE,
+    owner_id      INTEGER NOT NULL,
+    pw_stamp      TEXT NOT NULL DEFAULT '',
+    name          TEXT NOT NULL DEFAULT '',
+    version       TEXT NOT NULL DEFAULT '',
+    os_info       TEXT NOT NULL DEFAULT '',
+    ip            TEXT NOT NULL DEFAULT '',
+    registered_at TEXT NOT NULL,
+    last_seen_at  TEXT,
+    revoked_at    TEXT,
+    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS client_enroll_codes (
+    code_hash  TEXT PRIMARY KEY,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    used_at    TEXT,
+    client_id  INTEGER,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 터널 하나 = 한 행. 닫힌 행도 지우지 않는다. 다시 열면 새 행이다.
+CREATE TABLE IF NOT EXISTS tunnel_sessions (
+    id           TEXT PRIMARY KEY,
+    server_id    INTEGER,
+    user_id      INTEGER,
+    client_id    INTEGER,
+    agent_id     INTEGER,
+    target       TEXT NOT NULL DEFAULT '',
+    state        TEXT NOT NULL DEFAULT 'opening'
+                 CHECK (state IN ('opening', 'open', 'closed', 'failed')),
+    opened_at    TEXT NOT NULL,
+    closed_at    TEXT,
+    bytes_up     INTEGER NOT NULL DEFAULT 0,
+    bytes_down   INTEGER NOT NULL DEFAULT 0,
+    client_ip    TEXT NOT NULL DEFAULT '',
+    close_reason TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE SET NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
 -- 챗봇이 스스로 고른 명령. 등급과 승인은 여기에만 걸린다.
 CREATE TABLE IF NOT EXISTS ssh_commands (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -594,6 +660,9 @@ CREATE INDEX IF NOT EXISTS idx_ssh_cmd_created    ON ssh_commands(created_at);
 CREATE INDEX IF NOT EXISTS idx_ssh_cmd_message    ON ssh_commands(message_id);
 CREATE INDEX IF NOT EXISTS idx_ssh_cmd_session    ON ssh_commands(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_server    ON sessions(server_id);
+CREATE INDEX IF NOT EXISTS idx_client_owner       ON client_agents(owner_id);
+CREATE INDEX IF NOT EXISTS idx_tunnel_user        ON tunnel_sessions(user_id, state);
+CREATE INDEX IF NOT EXISTS idx_tunnel_opened      ON tunnel_sessions(opened_at);
 """
 
 
@@ -815,7 +884,9 @@ def pending_migrations(conn):
               "patch_scans",
               # v8 : SSH 중계
               "ssh_servers", "ssh_grants", "ssh_commands", "relay_agents",
-              "relay_enroll_codes", "relay_jobs", "term_sessions", "term_inputs"):
+              "relay_enroll_codes", "relay_jobs", "term_sessions", "term_inputs",
+              # v10 : 클라이언트와 터널
+              "client_agents", "client_enroll_codes", "tunnel_sessions"):
         if not table_exists(conn, t):
             todo.append("CREATE TABLE %s" % t)
     # v8 : 기존 표에 더하는 컬럼과 CHECK 제약 변경
@@ -827,6 +898,8 @@ def pending_migrations(conn):
             todo.append("users.ssh_all_servers 추가")
         if "ssh_level" not in ucols:
             todo.append("users.ssh_level 추가")
+        if "ssh_shell" not in ucols:
+            todo.append("users.ssh_shell 추가")
     if menu_check_outdated(conn):
         todo.append("user_menus 재작성 (서버 메뉴 키 허용)")
     # v9 : 중계를 사람마다 둔다
@@ -880,6 +953,9 @@ FOREIGN_TABLE_MARKS = (
     ("relay_jobs", ("payload", "term_id")),
     ("term_sessions", ("close_reason", "lines_in")),
     ("term_inputs", ("line", "term_id")),
+    ("client_agents", ("key_hash", "pw_stamp")),
+    ("client_enroll_codes", ("code_hash", "client_id")),
+    ("tunnel_sessions", ("bytes_up", "target")),
 )
 
 
@@ -1048,6 +1124,18 @@ def migrate(verbose=True):
                 conn.execute("ALTER TABLE users ADD COLUMN ssh_level TEXT NOT NULL "
                              "DEFAULT 'off'")
                 steps.append("users.ssh_level 추가 (기본 off = 아무도 못 붙는다)")
+
+            # --- v10 : 셸 권한을 등급과 나눈다 -------------------------------
+            # 「변경」 등급만 웹 콘솔을 그대로 쓴다. 「조회」 는 지금까지 열려
+            # 있던 셸이 닫힌다. 그것이 이 칸을 만드는 이유다. 터널은 아무에게도
+            # 주지 않는다. 관리자가 직접 준다.
+            if "ssh_shell" not in column_names(conn, "users"):
+                conn.execute("ALTER TABLE users ADD COLUMN ssh_shell TEXT NOT NULL "
+                             "DEFAULT 'off'")
+                n = conn.execute("UPDATE users SET ssh_shell = 'console'"
+                                 " WHERE ssh_level = 'write'").rowcount
+                steps.append("users.ssh_shell 추가 (변경 등급 %d명은 웹 콘솔 유지, "
+                             "나머지는 끔)" % n)
 
             # --- v9 : 중계를 사람마다 둔다 --------------------------------
             # 사람마다 자기 VDI 에 중계를 깔고 자기 키로 붙는다. 그래서 일에도

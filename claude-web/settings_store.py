@@ -91,6 +91,10 @@ SETTING_DEFS = [
     {"key": "relay_chat_max_commands", "label": "한 질문당 명령 수", "type": "int",
      "min": 1, "max": 5, "restart": False, "group": "relay",
      "help": "챗봇이 한 번의 질문에 고를 수 있는 명령 수. 넘으면 그만둔다"},
+    {"key": "relay_tunnel_idle_seconds", "label": "PuTTY 터널 자동 닫기 (초)",
+     "type": "int", "min": 60, "max": 3600, "restart": False, "group": "relay",
+     "help": "터널에 이만큼 아무 바이트도 지나가지 않으면 닫는다. 심박은 세지 않는다. "
+             "PuTTY 의 keepalive 를 켜 두면 그 바이트가 지나가므로 닫히지 않는다"},
     {"key": "relay_queue_keep_days", "label": "중계 큐 보관 (일)", "type": "int",
      "min": 7, "max": 365, "restart": False, "group": "relay",
      "help": "전송 큐(relay_jobs)의 끝난 행만 이 기간 뒤에 정리한다. "
