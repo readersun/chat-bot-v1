@@ -632,7 +632,12 @@ td.wide { white-space: normal; max-width: 280px; }
           text: r.enroll ? "  아직 쓰지 않은 코드가 있습니다. 잃어버렸으면 다시 받으세요."
                          : "" })
       ]),
-      el("li", { text: "VDI 에서 relay.exe register 를 실행하고 두 줄을 적습니다." })
+      /* 올려 둔 것이 zip 이면 "풀고" 가 한 단계 더 있다. 그 말을 빼 두면
+         화면이 거짓말을 한다. (비밀번호 인증을 쓰면 plink.exe 를 함께 묶어
+         올리게 되므로 zip 이 흔하다) */
+      el("li", { text: /\.zip$/i.test(prog.name || "")
+          ? "VDI 에서 압축을 풀고, 그 폴더에서 relay.exe register 를 실행하고 두 줄을 적습니다."
+          : "VDI 에서 relay.exe register 를 실행하고 두 줄을 적습니다." })
     ]);
     box.appendChild(steps);
     box.appendChild(el("div", { id: "code-box" }));
