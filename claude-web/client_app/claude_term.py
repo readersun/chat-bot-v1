@@ -54,7 +54,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 APP_NAME = "Claude 터미널"
 
 APP_DIR = os.path.join(
@@ -502,6 +502,7 @@ def w32():
             ("SetWindowPos", wt.BOOL, [H, H, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                        ctypes.c_int, wt.UINT]),
             ("ShowWindow", wt.BOOL, [H, ctypes.c_int]),
+            ("RedrawWindow", wt.BOOL, [H, ctypes.c_void_p, ctypes.c_void_p, wt.UINT]),
             ("IsWindow", wt.BOOL, [H]),
             ("SetFocus", H, [H]),
             ("GetFocus", H, []),
@@ -594,6 +595,50 @@ def find_putty_window(pid):
     return found[0] if found else None
 
 
+def find_putty_dialogs(pid):
+    """
+    그 PuTTY 가 띄운 대화상자(호스트 키 확인 「PuTTY Security Alert」, 오류 창 등).
+
+    PuTTY 를 탭 안에 넣으면 이 창들의 주인이 이 프로그램의 창이 되어, 뒤에 깔려
+    안 보일 수 있다. 그동안 PuTTY 는 대답을 기다리며 탭을 그리지 않는다.
+    """
+    w = w32()
+    if w is None or not pid:
+        return []
+    found = []
+
+    def cb(hwnd, _l):
+        p = w.wt.DWORD()
+        w.u.GetWindowThreadProcessId(hwnd, w.ctypes.byref(p))
+        if p.value == pid and w.u.IsWindowVisible(hwnd):
+            buf = w.ctypes.create_unicode_buffer(64)
+            w.u.GetClassNameW(hwnd, buf, 64)
+            # 0.85 의 호스트 키 창은 "PuTTYHostKeyDialog", 오류 창은 "#32770" 이다.
+            # 이름에 기대지 않고, 보이는 창 중 터미널("PuTTY")이 아닌 것을 모두 잡는다.
+            if buf.value != "PuTTY":
+                found.append(hwnd)
+        return True
+
+    w.u.EnumWindows(w.EnumProc(cb), 0)
+    return found
+
+
+def bring_dialog(hwnd, over):
+    """대화상자를 over(이 프로그램 창) 가운데로 옮기고 맨 앞으로."""
+    w = w32()
+    if w is None or not hwnd or not w.u.IsWindow(hwnd):
+        return
+    d, o = w.RECT(), w.RECT()
+    w.u.GetWindowRect(hwnd, w.ctypes.byref(d))
+    w.u.GetWindowRect(over, w.ctypes.byref(o))
+    x = o.l + max(0, ((o.r - o.l) - (d.r - d.l)) // 2)
+    y = o.t + max(0, ((o.b - o.t) - (d.b - d.t)) // 3)
+    # 잠깐 TOPMOST 로 올렸다가 내린다. 계속 TOPMOST 로 두면 다른 프로그램 위에 남는다.
+    w.u.SetWindowPos(hwnd, -1, x, y, 0, 0, 0x0001 | 0x0040)      # NOSIZE|SHOWWINDOW
+    w.u.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
+    w.u.SetForegroundWindow(hwnd)
+
+
 def embed_window(hwnd, parent):
     """PuTTY 창을 parent(탭 칸)의 자식으로 넣는다. 실패하면 False."""
     w = w32()
@@ -623,6 +668,18 @@ def fit_window(hwnd, width, height):
     # SWP_NOZORDER | SWP_NOACTIVATE
     w.u.SetWindowPos(hwnd, None, -left, -top, max(1, width + 2 * left),
                      max(1, height + top + left), 0x0004 | 0x0010)
+    redraw_window(hwnd)
+
+
+def redraw_window(hwnd):
+    """
+    다시 그리게 한다. 숨겨 띄운 PuTTY 는 탭에 넣고 보여도, 새 글자가 오기 전에는
+    (SSH 키 교환 중 등) 스스로 다시 그리지 않아서 전에 그 자리에 있던 그림이 남는다.
+    """
+    w = w32()
+    if w is not None and hwnd and w.u.IsWindow(hwnd):
+        # RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW
+        w.u.RedrawWindow(hwnd, None, None, 0x0001 | 0x0004 | 0x0400 | 0x0080 | 0x0100)
 
 
 def release_window(hwnd):
@@ -1372,24 +1429,24 @@ def run_gui():
         b_paste = button(btn_row, "PuTTY 에서 복사한 것 붙여넣기", None, "soft", pady=6)
         b_paste.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
-        log_wrap = tk.Frame(right, bg=PAPER)
-        log_wrap.pack(fill="both", expand=True)
-        log_bar = tk.Scrollbar(log_wrap, orient="vertical")
-        log_bar.pack(side="right", fill="y")
-        log = tk.Text(log_wrap, wrap="word", bg=PAPER, fg=INK, relief="flat", font=F,
+        chat_wrap = tk.Frame(right, bg=PAPER)
+        chat_wrap.pack(fill="both", expand=True)
+        chat_bar = tk.Scrollbar(chat_wrap, orient="vertical")
+        chat_bar.pack(side="right", fill="y")
+        chat = tk.Text(chat_wrap, wrap="word", bg=PAPER, fg=INK, relief="flat", font=F,
                       padx=14, pady=10, state="disabled", highlightthickness=0,
-                      yscrollcommand=log_bar.set, cursor="arrow", spacing1=2, spacing3=2)
-        log.pack(side="left", fill="both", expand=True)
-        log_bar.configure(command=log.yview)
-        log.tag_configure("me_h", foreground=ACCENT, font=F_S_B, justify="right")
-        log.tag_configure("me", foreground=INK, justify="right", lmargin1=60, lmargin2=60)
-        log.tag_configure("bot_h", foreground=MUTED, font=F_S_B)
-        log.tag_configure("bot", foreground=INK, rmargin=20)
-        log.tag_configure("chip", foreground=ACCENT, background=ACCENT_SOFT, font=F_S,
+                      yscrollcommand=chat_bar.set, cursor="arrow", spacing1=2, spacing3=2)
+        chat.pack(side="left", fill="both", expand=True)
+        chat_bar.configure(command=chat.yview)
+        chat.tag_configure("me_h", foreground=ACCENT, font=F_S_B, justify="right")
+        chat.tag_configure("me", foreground=INK, justify="right", lmargin1=60, lmargin2=60)
+        chat.tag_configure("bot_h", foreground=MUTED, font=F_S_B)
+        chat.tag_configure("bot", foreground=INK, rmargin=20)
+        chat.tag_configure("chip", foreground=ACCENT, background=ACCENT_SOFT, font=F_S,
                           justify="right")
-        log.tag_configure("cmd", foreground=MUTED, font=MONO_S, lmargin1=8, lmargin2=8)
-        log.tag_configure("warn", foreground=WARN)
-        log.tag_configure("muted", foreground=MUTED, font=F_S)
+        chat.tag_configure("cmd", foreground=MUTED, font=MONO_S, lmargin1=8, lmargin2=8)
+        chat.tag_configure("warn", foreground=WARN)
+        chat.tag_configure("muted", foreground=MUTED, font=F_S)
 
         # ── 가운데: 탭 + 탭 안의 PuTTY ──
         center = tk.Frame(body, bg=TERM)
@@ -1463,6 +1520,8 @@ def run_gui():
                 self.phase = "opening"         # opening | open | closed
                 self.reason = ""
                 self.launched = False
+                self.embed_tried = False       # 창을 찾아 넣어 봤다 (실패하면 별도 창)
+                self.dialog = None             # PuTTY 가 띄운 대화상자 (호스트 키 등)
 
                 self.page = tk.Frame(pages, bg=TERM)
                 bar = tk.Frame(self.page, bg=TERM_BAR, height=int(38 * scale))
@@ -1479,6 +1538,10 @@ def run_gui():
                 self.b_shot.pack(side="right")
                 self.b_front = button(bar, "앞으로 가져오기", lambda: bring_front(self.hwnd),
                                       "ghost", font=F_S, padx=10, pady=2)
+                self.b_dialog = button(bar, "PuTTY 확인 창 보기",
+                                       lambda: bring_dialog(self.dialog, toplevel_of(
+                                           root.winfo_id())), "mint", font=F_S_B,
+                                       padx=10, pady=2)
 
                 self.stage = tk.Frame(self.page, bg=TERM)
                 self.stage.pack(fill="both", expand=True)
@@ -1528,11 +1591,16 @@ def run_gui():
                 self.b_shot.configure(state="normal" if ready else "disabled",
                                       bg=MINT if ready else TERM_LINE,
                                       highlightbackground=MINT if ready else TERM_LINE)
-                if self.phase == "open" and self.hwnd and not self.embedded:
+                if (self.phase == "open" or self.embed_tried) and self.hwnd                         and not self.embedded and self.phase != "closed":
                     if not self.b_front.winfo_ismapped():
                         self.b_front.pack(side="right", padx=6)
                 else:
                     self.b_front.pack_forget()
+                if self.dialog and self.phase != "closed":
+                    if not self.b_dialog.winfo_ismapped():
+                        self.b_dialog.pack(side="right", padx=6)
+                else:
+                    self.b_dialog.pack_forget()
 
             def show_body(self):
                 for w in self.note.winfo_children():
@@ -1564,7 +1632,7 @@ def run_gui():
                 self.note.configure(bg=TERM)
                 box = tk.Frame(self.note, bg=TERM)
                 box.place(relx=0.5, rely=0.45, anchor="center")
-                if self.phase == "open" and not self.embedded:
+                if (self.phase == "open" or self.embed_tried) and not self.embedded:
                     big = "PuTTY 를 탭 안에 넣지 못해 별도 창으로 열었습니다."
                     small = ("터널은 같은 것이라 접속에는 영향이 없습니다. 위의 「앞으로 "
                              "가져오기」 로 그 창을 앞으로 부릅니다.")
@@ -1589,6 +1657,7 @@ def run_gui():
                     release_window(self.hwnd)
                 self.hwnd = None
                 self.embedded = False
+                self.embed_tried = False
 
         # --- 탭 다루기 ---------------------------------------------------
         def render_center():
@@ -1718,7 +1787,12 @@ def run_gui():
                     focus.give(hwnd)
             else:
                 # C-8 「탭이 안 될 때」: 별도 창으로 둔다. 터널은 같다.
+                w = w32()
+                log("탭 %s 안에 넣지 못함 (창 %s, 오류 %s)" % (
+                    tab.server["name"], hwnd,
+                    w.ctypes.get_last_error() if w is not None else "-"))
                 tab.embedded = False
+                tab.embed_tried = True
                 if hwnd:
                     show_window(hwnd, 5)
                 tab.show_body()
@@ -1909,17 +1983,17 @@ def run_gui():
         target_box.bind("<<ComboboxSelected>>", on_target)
 
         def clear_log():
-            for w in log.winfo_children():
+            for w in chat.winfo_children():
                 w.destroy()
-            log.configure(state="normal")
-            log.delete("1.0", "end")
-            log.configure(state="disabled")
+            chat.configure(state="normal")
+            chat.delete("1.0", "end")
+            chat.configure(state="disabled")
 
         def write(text, tag="bot"):
-            log.configure(state="normal")
-            log.insert("end", text, tag)
-            log.configure(state="disabled")
-            log.see("end")
+            chat.configure(state="normal")
+            chat.insert("end", text, tag)
+            chat.configure(state="disabled")
+            chat.see("end")
 
         def copy(text):
             root.clipboard_clear()
@@ -1929,7 +2003,7 @@ def run_gui():
 
         def card(c, sid):
             """승인 카드. 사람이 누르기 전에는 서버로 나가지 않는다."""
-            box = tk.Frame(log, bg=WARN_SOFT, padx=10, pady=8, highlightthickness=1,
+            box = tk.Frame(chat, bg=WARN_SOFT, padx=10, pady=8, highlightthickness=1,
                            highlightbackground=WARN_LINE)
             top_row = tk.Frame(box, bg=WARN_SOFT)
             top_row.pack(fill="x")
@@ -1962,10 +2036,10 @@ def run_gui():
                                                                         padx=6)
             button(row, "클립보드에", lambda: copy(c["command"]), font=F_S).pack(
                 side="left")
-            log.configure(state="normal")
-            log.window_create("end", window=box, padx=2, pady=4)
-            log.insert("end", "\n")
-            log.configure(state="disabled")
+            chat.configure(state="normal")
+            chat.window_create("end", window=box, padx=2, pady=4)
+            chat.insert("end", "\n")
+            chat.configure(state="disabled")
 
         def render_messages(msgs):
             clear_log()
@@ -2131,74 +2205,81 @@ def run_gui():
                 while True:
                     ev = app.events.get_nowait()
                     kind = ev[0]
-                    if kind == "refresh":
-                        apply_refresh(ev[1], ev[2])
-                    elif kind == "refresh_err":
-                        exc = ev[1]
-                        if exc.status == 401:
-                            show_register(exc.message)
-                            return
-                        say(exc.message, "warn")
-                    elif kind == "say":
-                        say(ev[1], ev[2])
-                    elif kind == "started":
-                        tab, sess = ev[1], ev[2]
-                        if tab in app.tabs:
-                            tab.sess = sess
-                        else:
-                            threading.Thread(target=sess.close, daemon=True).start()
-                    elif kind == "open_failed":
-                        tab = ev[1]
-                        if tab in app.tabs:
-                            tab.phase = "closed"
-                            tab.reason = ev[2]
-                            tab.show_body()
+                    # 사건 하나가 실패해도 펌프는 멈추지 않는다. 멈추면 그 뒤의 사건
+                    # (PuTTY 를 탭에 넣기, 열림, 끊김)이 전부 쌓이기만 하고 화면이 굳는다.
+                    try:
+                        if kind == "refresh":
+                            apply_refresh(ev[1], ev[2])
+                        elif kind == "refresh_err":
+                            exc = ev[1]
+                            if exc.status == 401:
+                                show_register(exc.message)
+                                return
+                            say(exc.message, "warn")
+                        elif kind == "say":
+                            say(ev[1], ev[2])
+                        elif kind == "started":
+                            tab, sess = ev[1], ev[2]
+                            if tab in app.tabs:
+                                tab.sess = sess
+                            else:
+                                threading.Thread(target=sess.close, daemon=True).start()
+                        elif kind == "open_failed":
+                            tab = ev[1]
+                            if tab in app.tabs:
+                                tab.phase = "closed"
+                                tab.reason = ev[2]
+                                tab.show_body()
+                                render_center()
+                                render_servers()
+                                render_targets()
+                            say(ev[2], "warn")
+                        elif kind == "launched":
+                            tab = tab_for_session(ev[1])
+                            if tab is not None:
+                                tab.launched = True
+                                tab.show_body()
+                            threading.Thread(target=find_window, args=(ev[1],),
+                                             daemon=True).start()
+                        elif kind == "found":
+                            on_found(ev[1], ev[2])
+                        elif kind == "tunnel":
+                            tab = tab_for_session(ev[1])
+                            if tab is not None and ev[1].state == "열림":
+                                tab.phase = "open"
+                                tab.show_body()
+                            say(ev[2], ev[3])
                             render_center()
                             render_servers()
                             render_targets()
-                        say(ev[2], "warn")
-                    elif kind == "launched":
-                        tab = tab_for_session(ev[1])
-                        if tab is not None:
-                            tab.launched = True
-                            tab.show_body()
-                        threading.Thread(target=find_window, args=(ev[1],),
-                                         daemon=True).start()
-                    elif kind == "found":
-                        on_found(ev[1], ev[2])
-                    elif kind == "tunnel":
-                        tab = tab_for_session(ev[1])
-                        if tab is not None and ev[1].state == "열림":
-                            tab.phase = "open"
-                            tab.show_body()
-                        say(ev[2], ev[3])
-                        render_center()
-                        render_servers()
-                        render_targets()
-                    elif kind == "closed":
-                        sess = ev[1]
-                        tab = tab_for_session(sess)
-                        if tab is not None:
-                            # 끊긴 탭은 저절로 닫히지 않는다. 이유와 「다시 열기」 가 남는다.
-                            tab.phase = "closed"
-                            tab.reason = ev[2]
-                            tab.forget_window()
-                            tab.show_body()
-                            say("%s · %s" % (sess.server["name"], ev[2]), "warn")
-                        render_center()
-                        render_servers()
-                        render_targets()
-                    elif kind == "messages":
-                        app.messages[ev[1]] = ev[2]
-                        if ev[1] == app.target:
-                            render_messages(ev[2])
-                    elif kind == "reload_chat":
-                        load_chat(ev[1])
-                    elif kind == "send_done":
-                        app.busy.discard(ev[1])
-                        if ev[1] == app.target:
-                            b_send.configure(state="normal")
-                        load_chat(ev[1])
+                        elif kind == "closed":
+                            sess = ev[1]
+                            tab = tab_for_session(sess)
+                            if tab is not None:
+                                # 끊긴 탭은 저절로 닫히지 않는다. 이유와 「다시 열기」 가 남는다.
+                                tab.phase = "closed"
+                                tab.reason = ev[2]
+                                tab.forget_window()
+                                tab.show_body()
+                                say("%s · %s" % (sess.server["name"], ev[2]), "warn")
+                            render_center()
+                            render_servers()
+                            render_targets()
+                        elif kind == "messages":
+                            app.messages[ev[1]] = ev[2]
+                            if ev[1] == app.target:
+                                render_messages(ev[2])
+                        elif kind == "reload_chat":
+                            load_chat(ev[1])
+                        elif kind == "send_done":
+                            app.busy.discard(ev[1])
+                            if ev[1] == app.target:
+                                b_send.configure(state="normal")
+                            load_chat(ev[1])
+                    except Exception:          # noqa: BLE001
+                        import traceback
+                        log("사건 %s 처리 실패: %s" % (kind, traceback.format_exc().rstrip()))
+                        say("오류가 났습니다. %s 를 보내 주세요." % LOG_PATH, "warn")
             except queue.Empty:
                 pass
             root.after(100, pump)
@@ -2218,6 +2299,44 @@ def run_gui():
             render_counts()
             root.after(5000, tick)
 
+        def watch_dialogs():
+            """
+            PuTTY 가 대화상자를 띄우면 앞으로 꺼낸다. 처음 붙는 서버는 반드시 호스트 키를
+            묻는다(「PuTTY Security Alert」). 그 창이 뒤에 깔리면 탭이 멈춘 것처럼 보인다.
+            """
+            if gen != app.generation:
+                return
+            try:
+                top = toplevel_of(root.winfo_id())
+                for t in app.tabs:
+                    pid = getattr(getattr(t.sess, "proc", None), "pid", None)
+                    if t.phase == "closed" or not pid:
+                        if t.dialog:
+                            t.dialog = None
+                            t.paint()
+                        continue
+                    found = find_putty_dialogs(pid)
+                    now = found[0] if found else None
+                    if now and now != t.dialog:
+                        log("탭 %s PuTTY 대화상자 %s" % (t.server["name"], now))
+                        if app.active is not t:
+                            activate(t)
+                        bring_dialog(now, top)
+                        say("%s · PuTTY 가 확인을 기다립니다 (처음 붙는 서버면 호스트 키). "
+                            "앞에 뜬 창에서 고르세요." % t.server["name"], "warn")
+                    elif not now and t.dialog:
+                        # 대답했다 → 탭을 다시 그리고 PuTTY 에 키보드를 준다
+                        t.fit()
+                        if app.active is t and t.embedded and t.hwnd:
+                            focus.give(t.hwnd)
+                    if now != t.dialog:
+                        t.dialog = now
+                        t.paint()
+            except Exception:                  # noqa: BLE001
+                import traceback
+                log("대화상자 감시 실패: %s" % traceback.format_exc().rstrip())
+            root.after(600, watch_dialogs)
+
         def close_everything():
             for t in list(app.tabs):
                 if t.sess is not None:
@@ -2235,6 +2354,7 @@ def run_gui():
         pump()
         refresh()
         tick()
+        watch_dialogs()
 
     # --- C-7 설정 ---------------------------------------------------------
     def show_settings():
