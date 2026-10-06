@@ -144,18 +144,73 @@ schtasks /create /tn "claude-relay" /tr "C:\ops\relay.exe" /sc onstart /ru SYSTE
 
 ## 6. 서버에 붙는 방법 두 가지
 
-### 키 (권한다)
+중계는 **ssh 를 직접 하지 않는다.** 받은 명령을 이 PC 의 ssh 클라이언트에
+넘긴다. 그래서 어느 쪽을 쓰느냐에 따라 필요한 프로그램이 다르다.
 
-VDI 에 키를 두고 서버에 공개키를 넣는다.
+| 인증 | 쓰는 프로그램 | VDI 에 설치할 것 |
+|---|---|---|
+| 키 | `ssh.exe` | **없다.** 윈도우 10/11 에 기본으로 들어 있다 |
+| 비밀번호 | `plink.exe` | PuTTY, 또는 `plink.exe` 하나를 중계 옆에 두기 |
+
+### 키 (권한다) — 윈도우 11 에서 만드는 법
+
+윈도우 11 에는 OpenSSH 클라이언트가 기본으로 들어 있다. **설치할 것이 없다.**
+PowerShell 이나 명령 프롬프트를 열고 그대로 친다.
+
+**① 키를 만든다**
 
 ```
-> ssh-keygen -t ed25519 -f %USERPROFILE%\.ssh\ops-vdi-01 -C "ops-vdi-01"
+> ssh-keygen -t ed25519 -C "hong-vdi-01" -f %USERPROFILE%\.ssh\ops-vdi-01
+```
+
+암호 구절(passphrase)을 묻는데 **그냥 엔터를 두 번 친다(빈 값).** 중계는 사람이
+없는 상태에서 돌기 때문에, 암호 구절을 걸면 붙을 때마다 사람이 쳐 줘야 한다.
+대신 파일 권한으로 지킨다(③).
+
+두 파일이 생긴다.
+
+```
+%USERPROFILE%\.ssh\ops-vdi-01       <- 비밀키. 이 PC 에서 절대 내보내지 않는다
+%USERPROFILE%\.ssh\ops-vdi-01.pub   <- 공개키. 이것만 서버에 넣는다
+```
+
+**② 공개키를 서버에 넣는다**
+
+```
 > type %USERPROFILE%\.ssh\ops-vdi-01.pub
-  (이 줄을 서버의 ~/.ssh/authorized_keys 에 넣는다)
 ```
 
-웹의 「서버 추가」에서 인증을 **키**로 두고 **쓸 키 이름**에 `ops-vdi-01` 을
-적는다. 키 **내용은 챗봇 서버에 올라가지 않는다.** 이름만 간다.
+나온 한 줄을 대상 서버의 `~/.ssh/authorized_keys` 에 덧붙인다. 서버에 아직
+비밀번호로 들어갈 수 있다면 이 한 줄로 끝난다. (사람이 직접 치는 것이라
+비밀번호를 물어도 된다)
+
+```
+> type %USERPROFILE%\.ssh\ops-vdi-01.pub | ssh svc_ops@10.20.30.181 "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+```
+
+**③ 비밀키 파일 권한을 좁힌다**
+
+윈도우는 새로 만든 파일을 여러 사람이 읽을 수 있게 둘 때가 있다. 그러면 ssh 가
+`Permissions for ... are too open` 으로 **아예 거부한다.**
+
+```
+> icacls %USERPROFILE%\.ssh\ops-vdi-01 /inheritance:r /grant:r "%USERNAME%:R"
+```
+
+**④ 손으로 한 번 확인한다**
+
+```
+> ssh -i %USERPROFILE%\.ssh\ops-vdi-01 svc_ops@10.20.30.181 "hostname"
+```
+
+**⑤ 웹에 등록한다**
+
+관리자가 「서버 추가」에서 인증을 **키**로 두고 **쓸 키 이름**에 `ops-vdi-01` 만
+적는다. 키 **내용은 챗봇 서버에 올라가지 않는다. 이름 한 줄만 간다.**
+중계가 그 이름으로 `%USERPROFILE%\.ssh\ops-vdi-01` 을 찾는다.
+
+> 사람마다 자기 키를 만들어 넣으면, 대상 서버의 로그에도 누가 들어왔는지
+> 키로 구분되어 남는다. 공용 키 하나를 돌려 쓰면 그 구분이 사라진다.
 
 ### 비밀번호
 
@@ -163,12 +218,46 @@ VDI 에 키를 두고 서버에 공개키를 넣는다.
 갈 때만 복호화해서 실어 보낸다. 중계는 받아서 메모리에만 들고 쓰고 버린다.
 디스크에 쓰지 않는다.
 
-처음 붙기 전에 **호스트 키를 한 번 받아 둬야 한다.** `plink` 는 모르는 호스트
-키를 비대화형으로 받아들이지 않는다.
+**`plink.exe` 가 필요하다.** 윈도우 기본 `ssh.exe` 는 비밀번호를 비대화형으로
+받지 않는다. 일부러 그렇게 만들어져 있다 — 비밀번호는 사람이 터미널에 직접
+치게 하려는 것이다. 그래서 PuTTY 의 `plink.exe` 를 쓴다. 두 길이 있다.
+
+**(가) 중계 옆에 plink.exe 를 둔다 — 설치가 필요 없다**
+
+```
+C:\relay\
+   relay.exe
+   plink.exe     <- 여기 두면 중계가 가장 먼저 여기를 본다
+```
+
+관리자가 이 폴더를 통째로 zip 으로 묶어 웹의 **중계 프로그램**에 올리면 된다
+(`.exe` 말고 `.zip` 도 올릴 수 있다). 쓰는 사람은 풀기만 하면 되고, 어느
+plink 를 쓰는지도 분명해진다.
+
+**(나) VDI 마다 PuTTY 를 설치한다**
+
+`C:\Program Files\PuTTY\plink.exe` 가 생기고 중계가 자동으로 찾는다.
+
+어느 쪽이든 처음 붙기 전에 **호스트 키를 한 번 받아 둬야 한다.** `plink` 는
+모르는 호스트 키를 비대화형으로 받아들이지 않는다.
 
 ```
 > plink -ssh svc_ops@10.20.30.181
   The server's host key is not cached. ... Store key in cache? (y/n) y
+```
+
+> 비밀번호는 `plink -pw <비밀번호>` 로 **명령줄에 실린다.** 같은 PC 에 로그인한
+> 다른 사람이 작업 관리자나 `tasklist` 로 볼 수 있다는 뜻이다. 키 인증을
+> 권하는 이유가 하나 더 있는 셈이다.
+
+### 지금 뭘 쓸 수 있는지 보는 법
+
+```
+> relay.exe status
+
+  이 프로그램 : C:\relay
+  ssh.exe    : C:\Windows\System32\OpenSSH\ssh.exe
+  plink.exe  : 없음 (비밀번호 인증을 쓰면 필요. 이 폴더에 plink.exe 를 넣어도 된다)
 ```
 
 ---

@@ -146,8 +146,25 @@ def which(name):
     return _w(name)
 
 
+def here():
+    """
+    relay.exe (또는 relay.py) 가 있는 폴더.
+
+    shutil.which 가 보는 "현재 폴더" 와 다르다. 그쪽은 프로세스의 작업
+    디렉터리라서, 서비스로 등록하거나 바로가기로 띄우면 엉뚱한 곳을 가리킨다.
+    """
+    target = sys.executable if getattr(sys, "frozen", False) else __file__
+    return os.path.dirname(os.path.abspath(target))
+
+
+def beside(name):
+    """relay.exe 옆에 둔 프로그램. 묶어서 나눠 줄 때 여기에 넣는다."""
+    guess = os.path.join(here(), name)
+    return guess if os.path.exists(guess) else None
+
+
 def ssh_path():
-    found = which("ssh")
+    found = beside("ssh.exe") or which("ssh")
     if found:
         return found
     guess = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
@@ -156,7 +173,14 @@ def ssh_path():
 
 
 def plink_path():
-    found = which("plink")
+    """
+    plink.exe 를 찾는다. **relay.exe 옆을 가장 먼저** 본다.
+
+    관리자가 relay.exe 와 plink.exe 를 한 폴더에 묶어 zip 으로 올려 두면,
+    쓰는 사람은 풀기만 하면 된다. VDI 마다 PuTTY 를 설치하지 않아도 되고,
+    어느 plink 를 쓰는지도 분명해진다.
+    """
+    found = beside("plink.exe") or which("plink")
     if found:
         return found
     for base in (r"C:\Program Files\PuTTY", r"C:\Program Files (x86)\PuTTY"):
@@ -665,8 +689,11 @@ def cmd_status():
         print("아직 등록하지 않았습니다. relay.exe register 로 등록하세요.")
         return 1
     print("서버 주소  : %s" % cfg["url"])
+    print("이 프로그램 : %s" % here())
     print("ssh.exe    : %s" % (ssh_path() or "없음"))
-    print("plink.exe  : %s" % (plink_path() or "없음 (비밀번호 인증을 쓰면 필요)"))
+    print("plink.exe  : %s" % (plink_path()
+                               or "없음 (비밀번호 인증을 쓰면 필요. "
+                                  "이 폴더에 plink.exe 를 넣어도 된다)"))
     server = Server(cfg["url"], cfg.get("agent_key"), insecure=bool(cfg.get("insecure")))
     try:
         res = server.post("/api/relay/beat", {"terms": []}, timeout=20)
